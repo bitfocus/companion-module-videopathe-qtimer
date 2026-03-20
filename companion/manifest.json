@@ -1,0 +1,27 @@
+{
+  "$schema": "../node_modules/@companion-module/base/assets/manifest.schema.json",
+  "id": "videopathe-qtimer",
+  "name": "videopathe-qtimer",
+  "shortname": "QTimer",
+  "description": "Control QTimer through its local HTTP API",
+  "version": "1.0.0",
+  "license": "MIT",
+  "repository": "git+https://github.com/videopathe/companion-module-videopathe-qtimer.git",
+  "bugs": "https://github.com/bitfocus/companion-module-videopathe-qtimer/issues",
+  "maintainers": [
+    {
+      "name": "Quintus",
+      "email": "quintus.videopathe@gmail.com"
+    }
+  ],
+  "runtime": {
+    "type": "node22",
+    "api": "nodejs-ipc",
+    "apiVersion": "0.0.0",
+    "entrypoint": "../dist/main.js"
+  },
+  "legacyIds": [],
+  "manufacturer": "Videopathe",
+  "products": [ "QTimer" ],
+  "keywords": [ "timer", "countdown", "chrono", "playlist", "show-control" ]
+}
