@@ -2,7 +2,7 @@
 
 See [HELP.md](./companion/HELP.md) and [LICENSE](./LICENSE)
 
-Bitfocus Companion module for controlling QTimer over its local HTTP API. 
+Bitfocus Companion module for controlling QTimer over its local HTTP API.
 
 App is available for free on [videopathe.com](https://videopathe.com) for Windows / MacOS.
 

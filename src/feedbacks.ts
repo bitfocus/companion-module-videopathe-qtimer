@@ -1,9 +1,5 @@
 import { combineRgb } from '@companion-module/base'
-import {
-	COMPARISON_CHOICES,
-	DISPLAY_MODE_CHOICES,
-	SESSION_MATCH_CHOICES,
-} from './choices.js'
+import { COMPARISON_CHOICES, DISPLAY_MODE_CHOICES, SESSION_MATCH_CHOICES } from './choices.js'
 import {
 	compareNumbers,
 	compareStrings,
@@ -314,7 +310,9 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 				}
 
 				const background = displayTime.blinkEnabled
-					? (displayTime.blinkVisible ? accentuateColor(rgb) : darkenColor(rgb))
+					? displayTime.blinkVisible
+						? accentuateColor(rgb)
+						: darkenColor(rgb)
 					: rgb
 
 				return {
@@ -351,7 +349,8 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 				color: combineRgb(255, 255, 255),
 			},
 			options: [],
-			callback: () => (self.runtimeState.qtimer?.audioSettings?.triggerRules ?? []).some((rule) => rule.enabled === true),
+			callback: () =>
+				(self.runtimeState.qtimer?.audioSettings?.triggerRules ?? []).some((rule) => rule.enabled === true),
 		},
 		playlist_running: {
 			name: 'Playlist is running',
@@ -390,7 +389,8 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 					max: 999,
 				},
 			],
-			callback: (feedback) => safeNumber(self.runtimeState.playlist?.currentSessionIndex, -1) === Number(feedback.options.index),
+			callback: (feedback) =>
+				safeNumber(self.runtimeState.playlist?.currentSessionIndex, -1) === Number(feedback.options.index),
 		},
 		playlist_current_session_name: {
 			name: 'Current playlist session name matches',
@@ -417,7 +417,11 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 			],
 			callback: (feedback) => {
 				const currentSession = getCurrentPlaylistSession(self.runtimeState.playlist)
-				return compareStrings(String(feedback.options.matchType), currentSession?.name ?? '', String(feedback.options.text ?? ''))
+				return compareStrings(
+					String(feedback.options.matchType),
+					currentSession?.name ?? '',
+					String(feedback.options.text ?? ''),
+				)
 			},
 		},
 		remaining_time_compare: {
@@ -444,7 +448,12 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 					max: 86400,
 				},
 			],
-			callback: (feedback) => compareNumbers(String(feedback.options.operator), safeNumber(self.runtimeState.qtimer?.timeRemaining), Number(feedback.options.seconds)),
+			callback: (feedback) =>
+				compareNumbers(
+					String(feedback.options.operator),
+					safeNumber(self.runtimeState.qtimer?.timeRemaining),
+					Number(feedback.options.seconds),
+				),
 		},
 		progress_percent_compare: {
 			name: 'Progress percent comparison',
@@ -470,7 +479,8 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 					max: 100,
 				},
 			],
-			callback: (feedback) => compareNumbers(String(feedback.options.operator), self.progressPercent, Number(feedback.options.percent)),
+			callback: (feedback) =>
+				compareNumbers(String(feedback.options.operator), self.progressPercent, Number(feedback.options.percent)),
 		},
 	})
 }

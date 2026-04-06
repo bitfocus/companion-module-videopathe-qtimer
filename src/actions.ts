@@ -20,6 +20,10 @@ function toggleChoiceToPayload(choice: unknown): boolean | undefined {
 	}
 }
 
+function getRuleId(value: unknown): string {
+	return typeof value === 'string' ? value.trim() : ''
+}
+
 export function UpdateActions(self: ModuleInstance): void {
 	self.setActionDefinitions({
 		refresh_state: {
@@ -70,7 +74,8 @@ export function UpdateActions(self: ModuleInstance): void {
 					max: 86400,
 				},
 			],
-			callback: async (event) => self.postCommand('/api/timer/adjust', { adjustment: Number(event.options.adjustment) }),
+			callback: async (event) =>
+				self.postCommand('/api/timer/adjust', { adjustment: Number(event.options.adjustment) }),
 		},
 		timer_preset: {
 			name: 'Timer: Recall preset',
@@ -126,10 +131,11 @@ export function UpdateActions(self: ModuleInstance): void {
 					max: 100000,
 				},
 			],
-			callback: async (event) => self.postCommand('/api/timer/options/blink-threshold', {
-				mode: event.options.mode,
-				threshold: Number(event.options.threshold),
-			}),
+			callback: async (event) =>
+				self.postCommand('/api/timer/options/blink-threshold', {
+					mode: event.options.mode,
+					threshold: Number(event.options.threshold),
+				}),
 		},
 		timer_toggle_additional_time: {
 			name: 'Timer: Toggle additional time',
@@ -189,7 +195,8 @@ export function UpdateActions(self: ModuleInstance): void {
 					max: 86400,
 				},
 			],
-			callback: async (event) => self.postCommand('/api/chrono/options/blink-threshold', { threshold: Number(event.options.threshold) }),
+			callback: async (event) =>
+				self.postCommand('/api/chrono/options/blink-threshold', { threshold: Number(event.options.threshold) }),
 		},
 		chrono_set_color_thresholds_enabled: {
 			name: 'Chrono: Set color thresholds enabled',
@@ -205,7 +212,8 @@ export function UpdateActions(self: ModuleInstance): void {
 					],
 				},
 			],
-			callback: async (event) => self.postCommand('/api/chrono/options/toggle-color-thresholds', { enabled: event.options.state === 'on' }),
+			callback: async (event) =>
+				self.postCommand('/api/chrono/options/toggle-color-thresholds', { enabled: event.options.state === 'on' }),
 		},
 		chrono_set_color_threshold: {
 			name: 'Chrono: Set color threshold value',
@@ -226,10 +234,11 @@ export function UpdateActions(self: ModuleInstance): void {
 					max: 86400,
 				},
 			],
-			callback: async (event) => self.postCommand('/api/chrono/options/set-color-threshold', {
-				threshold: event.options.threshold,
-				value: Number(event.options.value),
-			}),
+			callback: async (event) =>
+				self.postCommand('/api/chrono/options/set-color-threshold', {
+					threshold: event.options.threshold,
+					value: Number(event.options.value),
+				}),
 		},
 		chrono_set_color: {
 			name: 'Chrono: Set threshold color',
@@ -373,9 +382,10 @@ export function UpdateActions(self: ModuleInstance): void {
 		audio_toggle_enabled: {
 			name: 'Audio: Toggle enabled',
 			options: [],
-			callback: async () => self.postCommand('/api/audio/enabled', {
-				enabled: self.runtimeState.qtimer?.audioSettings?.enabled !== true,
-			}),
+			callback: async () =>
+				self.postCommand('/api/audio/enabled', {
+					enabled: self.runtimeState.qtimer?.audioSettings?.enabled !== true,
+				}),
 		},
 		audio_set_master_volume: {
 			name: 'Audio: Set master volume',
@@ -389,9 +399,10 @@ export function UpdateActions(self: ModuleInstance): void {
 					max: 100,
 				},
 			],
-			callback: async (event) => self.postCommand('/api/audio/master-volume', {
-				volume: Math.max(0, Math.min(100, Number(event.options.volume))) / 100,
-			}),
+			callback: async (event) =>
+				self.postCommand('/api/audio/master-volume', {
+					volume: Math.max(0, Math.min(100, Number(event.options.volume))) / 100,
+				}),
 		},
 		audio_set_stop_current_on_play: {
 			name: 'Audio: Set stop current on play',
@@ -407,7 +418,8 @@ export function UpdateActions(self: ModuleInstance): void {
 					],
 				},
 			],
-			callback: async (event) => self.postCommand('/api/audio/stop-current-on-play', { enabled: event.options.enabled === 'on' }),
+			callback: async (event) =>
+				self.postCommand('/api/audio/stop-current-on-play', { enabled: event.options.enabled === 'on' }),
 		},
 		audio_set_rules_enabled: {
 			name: 'Audio: Set all rules enabled',
@@ -423,7 +435,8 @@ export function UpdateActions(self: ModuleInstance): void {
 					],
 				},
 			],
-			callback: async (event) => self.postCommand('/api/audio/rules/enabled', { enabled: event.options.enabled === 'on' }),
+			callback: async (event) =>
+				self.postCommand('/api/audio/rules/enabled', { enabled: event.options.enabled === 'on' }),
 		},
 		audio_set_rule_enabled: {
 			name: 'Audio: Set one rule enabled',
@@ -446,9 +459,17 @@ export function UpdateActions(self: ModuleInstance): void {
 					],
 				},
 			],
-			callback: async (event) => self.postCommand(`/api/audio/rules/${encodeURIComponent(String(event.options.ruleId ?? '').trim())}/enabled`, {
-				enabled: event.options.enabled === 'on',
-			}),
+			callback: async (event) => {
+				const ruleId = getRuleId(event.options.ruleId)
+				if (!ruleId) {
+					self.log('warn', 'audio_set_rule_enabled: ruleId is required')
+					return
+				}
+
+				await self.postCommand(`/api/audio/rules/${encodeURIComponent(ruleId)}/enabled`, {
+					enabled: event.options.enabled === 'on',
+				})
+			},
 		},
 		audio_set_rule_volume: {
 			name: 'Audio: Set one rule volume',
@@ -469,9 +490,17 @@ export function UpdateActions(self: ModuleInstance): void {
 					max: 100,
 				},
 			],
-			callback: async (event) => self.postCommand(`/api/audio/rules/${encodeURIComponent(String(event.options.ruleId ?? '').trim())}/volume`, {
-				volume: Math.max(0, Math.min(100, Number(event.options.volume))) / 100,
-			}),
+			callback: async (event) => {
+				const ruleId = getRuleId(event.options.ruleId)
+				if (!ruleId) {
+					self.log('warn', 'audio_set_rule_volume: ruleId is required')
+					return
+				}
+
+				await self.postCommand(`/api/audio/rules/${encodeURIComponent(ruleId)}/volume`, {
+					volume: Math.max(0, Math.min(100, Number(event.options.volume))) / 100,
+				})
+			},
 		},
 		playlist_start: {
 			name: 'Playlist: Start',
@@ -505,7 +534,8 @@ export function UpdateActions(self: ModuleInstance): void {
 					max: 999,
 				},
 			],
-			callback: async (event) => self.postCommand('/api/playlist/select-session', { index: Number(event.options.index) }),
+			callback: async (event) =>
+				self.postCommand('/api/playlist/select-session', { index: Number(event.options.index) }),
 		},
 		playlist_select_session_by_name: {
 			name: 'Playlist: Select session by name',
@@ -518,7 +548,8 @@ export function UpdateActions(self: ModuleInstance): void {
 					useVariables: true,
 				},
 			],
-			callback: async (event) => self.postCommand('/api/playlist/select-session', { name: String(event.options.name ?? '') }),
+			callback: async (event) =>
+				self.postCommand('/api/playlist/select-session', { name: String(event.options.name ?? '') }),
 		},
 		playlist_set_session_enabled: {
 			name: 'Playlist: Enable or disable session',
@@ -542,10 +573,11 @@ export function UpdateActions(self: ModuleInstance): void {
 					],
 				},
 			],
-			callback: async (event) => self.postCommand('/api/playlist/session/enabled', {
-				index: Number(event.options.index),
-				enabled: event.options.enabled === 'on',
-			}),
+			callback: async (event) =>
+				self.postCommand('/api/playlist/session/enabled', {
+					index: Number(event.options.index),
+					enabled: event.options.enabled === 'on',
+				}),
 		},
 		playlist_set_end_action: {
 			name: 'Playlist: Set end action',
@@ -587,7 +619,8 @@ export function UpdateActions(self: ModuleInstance): void {
 					],
 				},
 			],
-			callback: async (event) => self.postCommand('/api/playlist/options/auto-intermission', { enabled: event.options.enabled === 'on' }),
+			callback: async (event) =>
+				self.postCommand('/api/playlist/options/auto-intermission', { enabled: event.options.enabled === 'on' }),
 		},
 		playlist_toggle_intermission: {
 			name: 'Playlist: Toggle or force intermission',
@@ -617,7 +650,10 @@ export function UpdateActions(self: ModuleInstance): void {
 					max: 86400,
 				},
 			],
-			callback: async (event) => self.postCommand('/api/playlist/options/default-session-duration', { duration: Number(event.options.duration) }),
+			callback: async (event) =>
+				self.postCommand('/api/playlist/options/default-session-duration', {
+					duration: Number(event.options.duration),
+				}),
 		},
 		playlist_set_default_additional_time: {
 			name: 'Playlist: Set default additional time',
@@ -631,7 +667,8 @@ export function UpdateActions(self: ModuleInstance): void {
 					max: 86400,
 				},
 			],
-			callback: async (event) => self.postCommand('/api/playlist/options/default-additional-time', { duration: Number(event.options.duration) }),
+			callback: async (event) =>
+				self.postCommand('/api/playlist/options/default-additional-time', { duration: Number(event.options.duration) }),
 		},
 		playlist_set_use_default_session_duration: {
 			name: 'Playlist: Set use default session duration',
@@ -647,7 +684,10 @@ export function UpdateActions(self: ModuleInstance): void {
 					],
 				},
 			],
-			callback: async (event) => self.postCommand('/api/playlist/options/use-default-session-duration', { enabled: event.options.enabled === 'on' }),
+			callback: async (event) =>
+				self.postCommand('/api/playlist/options/use-default-session-duration', {
+					enabled: event.options.enabled === 'on',
+				}),
 		},
 		playlist_set_intermission_duration: {
 			name: 'Playlist: Set intermission duration',
@@ -661,7 +701,8 @@ export function UpdateActions(self: ModuleInstance): void {
 					max: 86400,
 				},
 			],
-			callback: async (event) => self.postCommand('/api/playlist/options/intermission-duration', { duration: Number(event.options.duration) }),
+			callback: async (event) =>
+				self.postCommand('/api/playlist/options/intermission-duration', { duration: Number(event.options.duration) }),
 		},
 		playlist_clear_sessions: {
 			name: 'Playlist: Clear all sessions',

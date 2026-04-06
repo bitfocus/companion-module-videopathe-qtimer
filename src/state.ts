@@ -169,7 +169,7 @@ export function safeNumber(value: unknown, fallback = 0): number {
 }
 
 export function normalizeHexColor(value: unknown): string {
-	const input = String(value ?? '').trim()
+	const input = typeof value === 'string' ? value.trim() : ''
 	if (!input) {
 		return ''
 	}
@@ -227,7 +227,7 @@ export function splitDurationParts(totalSeconds: number): TimeParts {
 
 export function parseClockParts(clockText: string | undefined): TimeParts {
 	const input = String(clockText ?? '').trim()
-	const match = input.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp][Mm])?/) 
+	const match = input.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp][Mm])?/)
 
 	if (!match) {
 		return {
@@ -402,7 +402,8 @@ export function inferDisplayMode(state: QTimerStateSnapshot | undefined): Displa
 	if (displaySettings.logoFull?.visible) return 'logo'
 	if (displaySettings.chrono?.visible) return 'chrono'
 	if (displaySettings.clock2?.visible) return 'clock'
-	if (displaySettings.timer?.visible || displaySettings.progressBar?.visible || displaySettings.clock?.visible) return 'timer'
+	if (displaySettings.timer?.visible || displaySettings.progressBar?.visible || displaySettings.clock?.visible)
+		return 'timer'
 
 	return 'unknown'
 }

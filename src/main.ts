@@ -1,5 +1,5 @@
 import { InstanceBase, InstanceStatus, type SomeCompanionConfigField, runEntrypoint } from '@companion-module/base'
-import WebSocket from 'ws'
+import WebSocket, { type RawData } from 'ws'
 import { fetchJson, postJson, buildBaseUrl } from './api.js'
 import { UpdateActions } from './actions.js'
 import { GetConfigFields, type ModuleConfig } from './config.js'
@@ -46,6 +46,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 
 	private pollTimer: NodeJS.Timeout | undefined
 	private pollInFlight = false
+	private fetchAbortController = new AbortController()
 	private websocket: WebSocket | undefined
 	private websocketReconnectTimer: NodeJS.Timeout | undefined
 	private websocketConnected = false
@@ -84,13 +85,27 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 	}
 
 	async destroy(): Promise<void> {
+		this.fetchAbortController.abort()
+		this.pollInFlight = false
 		this.stopPolling()
 		this.disconnectWebSocket(false)
 		this.log('debug', 'destroy')
 	}
 
 	async configUpdated(config: ModuleConfig): Promise<void> {
+		this.fetchAbortController.abort()
+		this.fetchAbortController = new AbortController()
+		this.pollInFlight = false
 		this.config = config
+		this.runtimeState = {
+			connected: false,
+			lastError: null,
+			serverUrl: '',
+			lastUpdated: null,
+		}
+		this.updateVariablesFromState()
+		this.checkFeedbacks()
+		this.refreshDynamicPresets()
 		this.startPolling(true)
 		this.connectWebSocket()
 	}
@@ -147,6 +162,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		this.checkFeedbacks()
 
 		if (scheduleReconnect && this.hasValidConfig()) {
+			this.updateStatus(InstanceStatus.Connecting)
 			this.websocketReconnectTimer = setTimeout(() => {
 				this.websocketReconnectTimer = undefined
 				this.connectWebSocket()
@@ -162,7 +178,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		}
 
 		const wsUrl = `ws://${this.config.host}:${safeNumber(this.config.port, 2222)}/?client=companion-module`
-		const websocket = new WebSocket(wsUrl)
+		const websocket = new WebSocket(wsUrl, { handshakeTimeout: 10000 })
 		this.websocket = websocket
 
 		websocket.on('open', () => {
@@ -181,7 +197,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 				return
 			}
 
-			this.handleWebSocketMessage(data.toString())
+			this.handleWebSocketMessage(this.decodeWebSocketMessage(data))
 		})
 
 		websocket.on('close', () => {
@@ -198,7 +214,9 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 				return
 			}
 
-			this.log('debug', `WebSocket error: ${this.formatError(error)}`)
+			const message = this.formatError(error)
+			this.log('error', `WebSocket error: ${message}`)
+			this.updateStatus(InstanceStatus.ConnectionFailure, message)
 		})
 	}
 
@@ -206,7 +224,12 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		try {
 			const payload = JSON.parse(message) as { type?: string; data?: unknown }
 
-			if (payload.type !== 'state' || !payload.data || typeof payload.data !== 'object') {
+			if (
+				payload.type !== 'state' ||
+				typeof payload.data !== 'object' ||
+				payload.data === null ||
+				Array.isArray(payload.data)
+			) {
 				return
 			}
 
@@ -270,23 +293,38 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		}
 
 		this.pollInFlight = true
+		const requestController = this.fetchAbortController
+		const signal = requestController.signal
 
 		try {
 			const baseUrl = this.getBaseUrl()
 			const [statusResponse, playlistResponse, audioResponse] = await Promise.all([
-				fetchJson<QTimerStatusResponse>(`${baseUrl}/api/status`),
-				fetchJson<QTimerPlaylistStateResponse>(`${baseUrl}/api/playlist/state`).catch((error) => {
+				fetchJson<QTimerStatusResponse>(`${baseUrl}/api/status`, { signal }),
+				fetchJson<QTimerPlaylistStateResponse>(`${baseUrl}/api/playlist/state`, { signal }).catch((error) => {
+					if (signal.aborted && error instanceof Error && error.name === 'AbortError') {
+						return undefined
+					}
+
 					this.log('debug', `Playlist refresh failed: ${this.formatError(error)}`)
 					return undefined
 				}),
-				fetchJson<QTimerAudioSettingsResponse>(`${baseUrl}/api/audio/settings`).catch((error) => {
+				fetchJson<QTimerAudioSettingsResponse>(`${baseUrl}/api/audio/settings`, { signal }).catch((error) => {
+					if (signal.aborted && error instanceof Error && error.name === 'AbortError') {
+						return undefined
+					}
+
 					this.log('debug', `Audio refresh failed: ${this.formatError(error)}`)
 					return undefined
 				}),
 			])
 
+			if (requestController !== this.fetchAbortController || signal.aborted) {
+				return
+			}
+
 			const audioSettings = audioResponse?.audioSettings ?? statusResponse.state?.audioSettings
-			const audioSounds = this.normalizeAudioSounds(audioResponse)
+			const audioSounds =
+				audioResponse !== undefined ? this.normalizeAudioSounds(audioResponse) : (this.runtimeState.audioSounds ?? [])
 
 			this.runtimeState = {
 				connected: true,
@@ -306,6 +344,10 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			this.checkFeedbacks()
 			this.refreshDynamicPresets()
 		} catch (error) {
+			if (requestController !== this.fetchAbortController || requestController.signal.aborted) {
+				return
+			}
+
 			this.runtimeState = {
 				...this.runtimeState,
 				connected: false,
@@ -313,7 +355,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 				serverUrl: this.getBaseUrl(),
 			}
 
-			this.updateStatus(InstanceStatus.ConnectionFailure)
+			this.updateStatus(InstanceStatus.ConnectionFailure, this.runtimeState.lastError ?? undefined)
 			this.updateVariablesFromState()
 			this.checkFeedbacks()
 		} finally {
@@ -352,6 +394,30 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		return String(error)
 	}
 
+	private decodeWebSocketMessage(data: RawData): string {
+		if (typeof data === 'string') {
+			return data
+		}
+
+		if (Array.isArray(data)) {
+			return Buffer.concat(data.map((chunk) => this.toBuffer(chunk))).toString('utf8')
+		}
+
+		return this.toBuffer(data).toString('utf8')
+	}
+
+	private toBuffer(data: ArrayBuffer | Buffer | ArrayBufferView): Buffer {
+		if (Buffer.isBuffer(data)) {
+			return data
+		}
+
+		if (ArrayBuffer.isView(data)) {
+			return Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+		}
+
+		return Buffer.from(new Uint8Array(data))
+	}
+
 	private normalizeAudioSounds(audioResponse: QTimerAudioSettingsResponse | undefined): QTimerAudioSound[] {
 		const soundLabelOverrides = audioResponse?.audioSettings?.soundLabelOverrides ?? {}
 		const rawSounds = [
@@ -362,20 +428,29 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 
 		const dedupedSounds = new Map<string, QTimerAudioSound>()
 		for (const rawSound of rawSounds) {
-			const id = String(rawSound?.id ?? '').trim()
+			const id = typeof rawSound?.id === 'string' ? rawSound.id.trim() : ''
 			if (!id || dedupedSounds.has(id)) {
 				continue
 			}
 
 			const sourceType =
-				rawSound?.sourceType === 'builtin' || rawSound?.sourceType === 'custom' || rawSound?.sourceType === 'default-file'
+				rawSound?.sourceType === 'builtin' ||
+				rawSound?.sourceType === 'custom' ||
+				rawSound?.sourceType === 'default-file'
 					? rawSound.sourceType
 					: undefined
 
-			const defaultLabel = String(rawSound?.label ?? rawSound?.fileName ?? id).trim() || id
+			const defaultLabelSource =
+				typeof rawSound?.label === 'string'
+					? rawSound.label
+					: typeof rawSound?.fileName === 'string'
+						? rawSound.fileName
+						: id
+			const defaultLabel = defaultLabelSource.trim() || id
+			const overrideLabel = typeof soundLabelOverrides[id] === 'string' ? soundLabelOverrides[id].trim() : ''
 			dedupedSounds.set(id, {
 				id,
-				label: String(soundLabelOverrides[id] ?? defaultLabel).trim() || id,
+				label: overrideLabel || defaultLabel,
 				src: typeof rawSound?.src === 'string' ? rawSound.src : undefined,
 				sourceType,
 				mimeType: typeof rawSound?.mimeType === 'string' ? rawSound.mimeType : undefined,
@@ -383,13 +458,13 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			})
 		}
 
-		return Array.from(dedupedSounds.values()).sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: 'base' }))
+		return Array.from(dedupedSounds.values()).sort((left, right) =>
+			left.label.localeCompare(right.label, undefined, { sensitivity: 'base' }),
+		)
 	}
 
 	private refreshDynamicPresets(): void {
-		const signature = (this.runtimeState.audioSounds ?? [])
-			.map((sound) => `${sound.id}:${sound.label}`)
-			.join('|')
+		const signature = (this.runtimeState.audioSounds ?? []).map((sound) => `${sound.id}:${sound.label}`).join('|')
 
 		if (signature === this.audioPresetSignature) {
 			return
@@ -413,9 +488,10 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		const additionalTimeSeconds = safeNumber(qtimer?.additionalTimeValue)
 		const playlistChronoStartTime = safeNumber(playlist?.playlistChronoStartTime, 0)
 		const storedPlaylistChronoSeconds = safeNumber(playlist?.playlistChronoTime)
-		const playlistChronoSeconds = playlistChronoStartTime > 0 && (playlist?.isRunning === true || playlist?.intermissionMode === true)
-			? Math.max(storedPlaylistChronoSeconds, Math.floor((Date.now() - playlistChronoStartTime) / 1000))
-			: storedPlaylistChronoSeconds
+		const playlistChronoSeconds =
+			playlistChronoStartTime > 0 && (playlist?.isRunning === true || playlist?.intermissionMode === true)
+				? Math.max(storedPlaylistChronoSeconds, Math.floor((Date.now() - playlistChronoStartTime) / 1000))
+				: storedPlaylistChronoSeconds
 		const showHours = qtimer?.timerDisplayOptions?.showHours !== false
 		const chronoShowHours = qtimer?.chronoDisplayOptions?.showHours !== false
 		const displayMode = inferDisplayMode(qtimer)
@@ -429,7 +505,11 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		const clockParts = parseClockParts(qtimer?.currentTime)
 
 		this.setVariableValues({
-			connection_status: this.runtimeState.connected ? 'ok' : this.runtimeState.lastError ? 'connection_failure' : 'disconnected',
+			connection_status: this.runtimeState.connected
+				? 'ok'
+				: this.runtimeState.lastError
+					? 'connection_failure'
+					: 'disconnected',
 			websocket_connected: this.websocketConnected,
 			server_url: this.runtimeState.serverUrl || this.getBaseUrl(),
 			display_mode: displayMode,
