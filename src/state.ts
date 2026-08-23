@@ -1,5 +1,25 @@
 export type DisplayMode = 'timer' | 'clock' | 'chrono' | 'logo' | 'black' | 'mire' | 'unknown'
 export type DisplayTimeSource = 'timer' | 'chrono' | 'additional'
+export type LayoutMode = 'timer' | 'clock' | 'chrono' | 'logo'
+export type OutputRole = 'extended' | 'extended2' | 'network'
+export type LayoutTarget = 'main' | OutputRole
+
+export interface Screen2State {
+	/** true = the second extended screen mirrors the main screen (historic behaviour) */
+	followMain?: boolean
+	/** mode shown by the second screen when followMain is false */
+	mode?: DisplayMode
+}
+
+export interface OutputLayoutOverride {
+	presetIndex?: number
+	preset?: {
+		name?: string
+		names?: Partial<Record<LayoutMode, string>>
+	}
+}
+
+export type OutputLayoutOverrides = Partial<Record<OutputRole, OutputLayoutOverride | null>>
 
 export interface QTimerDisplayElement {
 	visible?: boolean
@@ -13,6 +33,11 @@ export interface QTimerColorDisplayElement extends QTimerDisplayElement {
 
 export interface QTimerTimerDisplayElement extends QTimerColorDisplayElement {
 	syncColorWithProgress?: boolean
+}
+
+export interface QTimerClockDisplayElement extends QTimerColorDisplayElement {
+	use12HourFormat?: boolean
+	showSeconds?: boolean
 }
 
 export interface QTimerProgressBarDisplayElement extends QTimerDisplayElement {
@@ -92,13 +117,21 @@ export interface QTimerStateSnapshot {
 		threshold2?: number
 		color2?: string
 	}
+	/** Authoritative flag since 2026.8 (chronoDisplayOptions.colorThresholdsEnabled is the legacy location) */
+	chronoColorThresholdsEnabled?: boolean
+	intermissionActive?: boolean
+	presets?: string[]
+	presetMessages?: string[]
+	screen2?: Screen2State
+	outputLayoutOverrides?: OutputLayoutOverrides
+	layoutMessages?: Record<string, Record<string, { message?: string; updatedAt?: string; cleared?: boolean }>>
 	audioSettings?: QTimerAudioSettings
 	displaySettings?: {
 		progressBar?: QTimerProgressBarDisplayElement
 		timer?: QTimerTimerDisplayElement
 		message?: QTimerColorDisplayElement
-		clock?: QTimerColorDisplayElement
-		clock2?: QTimerColorDisplayElement
+		clock?: QTimerClockDisplayElement
+		clock2?: QTimerClockDisplayElement
 		chrono?: QTimerColorDisplayElement
 		testPattern?: QTimerDisplayElement
 		blackMode?: QTimerDisplayElement
@@ -116,6 +149,13 @@ export interface PlaylistSessionSnapshot {
 	mode?: 'timer' | 'chrono'
 	isEnabled?: boolean
 	isCurrent?: boolean
+	message?: string
+	layoutPresetIndex?: number | null
+	additionalTimeEnabled?: boolean
+	additionalTimeValue?: number
+	scheduledStartEnabled?: boolean
+	scheduledStartTime?: string
+	hardStart?: boolean
 }
 
 export interface PlaylistSnapshot {
@@ -139,6 +179,42 @@ export interface PlaylistSnapshot {
 	useDefaultSessionDuration?: boolean
 	globalAdditionalTimeEnabled?: boolean
 	globalAdditionalTimeColor?: string
+	intermissionTriggeredAutomatically?: boolean
+	wasRunningBeforeIntermission?: boolean
+	originalSessionMode?: 'timer' | 'chrono'
+}
+
+export interface QTimerNdiStatus {
+	running?: boolean
+	initialized?: boolean
+	ndiRuntimeAvailable?: boolean
+	testPatternActive?: boolean
+	sourceName?: string
+	width?: number
+	height?: number
+	frameRate?: number
+	actualFrameRate?: number
+	frameCount?: number
+	renderTime?: number
+	includeAlpha?: boolean
+	error?: string | null
+	executableError?: string | null
+}
+
+export interface QTimerOmtStatus {
+	running?: boolean
+	initialized?: boolean
+	available?: boolean
+	runtimeAvailable?: boolean
+	configured?: boolean
+	testPatternActive?: boolean
+	sourceName?: string
+	width?: number
+	height?: number
+	frameRate?: number
+	quality?: string
+	includeAlpha?: boolean
+	error?: string | null
 }
 
 export interface QTimerStatusResponse {
@@ -306,6 +382,14 @@ function resolveTimerDisplayColor(state: QTimerStateSnapshot | undefined): strin
 	return '#EF4444'
 }
 
+export function isChronoColorThresholdsEnabled(state: QTimerStateSnapshot | undefined): boolean {
+	if (typeof state?.chronoColorThresholdsEnabled === 'boolean') {
+		return state.chronoColorThresholdsEnabled
+	}
+
+	return state?.chronoDisplayOptions?.colorThresholdsEnabled === true
+}
+
 function resolveChronoDisplayColor(state: QTimerStateSnapshot | undefined): string {
 	const chronoSeconds = safeNumber(state?.chronoTime)
 	const threshold2 = safeNumber(state?.chronoColorThresholds?.threshold2)
@@ -314,7 +398,7 @@ function resolveChronoDisplayColor(state: QTimerStateSnapshot | undefined): stri
 	const threshold1Color = normalizeHexColor(state?.chronoColorThresholds?.color1)
 	const defaultColor = normalizeHexColor(state?.displaySettings?.chrono?.color) || '#FFFFFF'
 
-	if (state?.chronoDisplayOptions?.colorThresholdsEnabled === true) {
+	if (isChronoColorThresholdsEnabled(state)) {
 		if (threshold2 > 0 && chronoSeconds >= threshold2 && threshold2Color) {
 			return threshold2Color
 		}
@@ -463,4 +547,129 @@ export function isTimerFinished(state: QTimerStateSnapshot | undefined): boolean
 	}
 
 	return safeNumber(state.timeRemaining) <= 0 && state.additionalTimeRunning !== true
+}
+
+/**
+ * Mode currently shown by the second extended screen.
+ * When it mirrors the main screen there is only one mode to report.
+ */
+export function getScreen2Mode(state: QTimerStateSnapshot | undefined): DisplayMode {
+	const screen2 = state?.screen2
+	if (!screen2 || screen2.followMain !== false) {
+		return inferDisplayMode(state)
+	}
+
+	return (screen2.mode as DisplayMode) ?? 'unknown'
+}
+
+export function isScreen2FollowingMain(state: QTimerStateSnapshot | undefined): boolean {
+	return state?.screen2?.followMain !== false
+}
+
+/** Layout preset index assigned to an output, or -1 when the output follows the main layout. */
+export function getOutputLayoutPresetIndex(state: QTimerStateSnapshot | undefined, role: OutputRole): number {
+	const override = state?.outputLayoutOverrides?.[role]
+	if (!override || typeof override.presetIndex !== 'number' || !Number.isFinite(override.presetIndex)) {
+		return -1
+	}
+
+	return override.presetIndex
+}
+
+export function getOutputLayoutPresetName(state: QTimerStateSnapshot | undefined, role: OutputRole): string {
+	const override = state?.outputLayoutOverrides?.[role]
+	if (!override?.preset) {
+		return ''
+	}
+
+	const layoutMode = inferLayoutMode(state)
+	const perModeName = layoutMode ? override.preset.names?.[layoutMode] : undefined
+	return (perModeName ?? override.preset.name ?? '').trim()
+}
+
+/** Layout family (timer/clock/chrono/logo) currently live, mirroring QTimer's own detection. */
+export function inferLayoutMode(state: QTimerStateSnapshot | undefined): LayoutMode | null {
+	const displaySettings = state?.displaySettings
+	if (!displaySettings) return null
+	if (displaySettings.blackMode?.visible) return null
+	if (displaySettings.testPattern?.visible) return null
+	if (displaySettings.logoFull?.visible) return 'logo'
+	if (displaySettings.clock2?.visible) return 'clock'
+	if (displaySettings.chrono?.visible) return 'chrono'
+	return 'timer'
+}
+
+export function isDisplayElementVisible(state: QTimerStateSnapshot | undefined, element: string): boolean {
+	const displaySettings: Record<string, QTimerDisplayElement | undefined> = state?.displaySettings ?? {}
+	return displaySettings[element]?.visible === true
+}
+
+export function isClock12HourFormat(state: QTimerStateSnapshot | undefined): boolean {
+	const clock2 = state?.displaySettings?.clock2
+	if (typeof clock2?.use12HourFormat === 'boolean') {
+		return clock2.use12HourFormat
+	}
+
+	return state?.displaySettings?.clock?.use12HourFormat === true
+}
+
+/** Duration in seconds encoded by a QTimer timer preset (`HH:MM:SS`, `MM:SS` or raw seconds). */
+export function parseTimerPresetDuration(preset: unknown): number {
+	if (typeof preset === 'number' && Number.isFinite(preset)) {
+		return Math.max(0, Math.round(preset))
+	}
+
+	const text = typeof preset === 'string' ? preset.trim() : ''
+	if (!text) {
+		return 0
+	}
+
+	const parts = text.split(':').map((part) => Number(part))
+	if (parts.some((part) => !Number.isFinite(part))) {
+		return 0
+	}
+
+	if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2]
+	if (parts.length === 2) return parts[0] * 60 + parts[1]
+	return Math.max(0, Math.round(parts[0] ?? 0))
+}
+
+export function getNextEnabledPlaylistSession(
+	playlist: PlaylistSnapshot | undefined,
+): PlaylistSessionSnapshot | undefined {
+	const sessions = playlist?.sessions
+	if (!sessions?.length) {
+		return undefined
+	}
+
+	const currentIndex = safeNumber(playlist?.currentSessionIndex, -1)
+	for (let index = currentIndex + 1; index < sessions.length; index++) {
+		if (sessions[index]?.isEnabled !== false) {
+			return { ...sessions[index], index }
+		}
+	}
+
+	return undefined
+}
+
+export function getPlaylistSessionByIndex(
+	playlist: PlaylistSnapshot | undefined,
+	index: number,
+): PlaylistSessionSnapshot | undefined {
+	const sessions = playlist?.sessions
+	if (!sessions?.length || index < 0 || index >= sessions.length) {
+		return undefined
+	}
+
+	return sessions[index]
+}
+
+/** End-of-session behaviour, collapsed into the single value the API exposes. */
+export function getPlaylistEndAction(
+	playlist: PlaylistSnapshot | undefined,
+): 'disabled' | 'stop-playlist' | 'intermission' | 'auto-mode' {
+	if (playlist?.stopOnSessionEnd === true) return 'stop-playlist'
+	if (playlist?.intermissionEnabled === true) return 'intermission'
+	if (playlist?.autoModeChangeEnabled === true) return 'auto-mode'
+	return 'disabled'
 }

@@ -1,6 +1,6 @@
 {
   "name": "companion-module-videopathe-qtimer",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "Bitfocus Companion module for QTimer",
   "main": "dist/main.js",
   "type": "module",
@@ -23,12 +23,12 @@
     "build:main": "tsc -p tsconfig.build.json",
     "dev": "tsc -p tsconfig.build.json --watch",
     "lint:raw": "eslint",
-    "lint": "run lint:raw .",
+    "lint": "yarn lint:raw .",
     "package": "run build && companion-module-build"
   },
   "dependencies": {
     "@companion-module/base": "~1.14.1",
-    "ws": "^8.21.0"
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@companion-module/tools": "^2.6.1",

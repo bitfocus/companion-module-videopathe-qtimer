@@ -53,3 +53,53 @@ export const CHRONO_COLOR_CHOICES = [
 	{ id: 'color1', label: 'Color 1' },
 	{ id: 'color2', label: 'Color 2' },
 ] as const
+
+export const LAYOUT_MODE_CHOICES = [
+	{ id: 'timer', label: 'Timer' },
+	{ id: 'clock', label: 'Clock' },
+	{ id: 'chrono', label: 'Chrono' },
+	{ id: 'logo', label: 'Logo' },
+] as const
+
+export const LAYOUT_TARGET_CHOICES = [
+	{ id: 'main', label: 'Main screen (+ extended & Key/Cut)' },
+	{ id: 'extended2', label: 'Second extended screen' },
+	{ id: 'network', label: 'Network stream (NDI / OMT)' },
+] as const
+
+export const OUTPUT_ROLE_CHOICES = [
+	{ id: 'extended', label: 'Extended screen (+ Key/Cut)' },
+	{ id: 'extended2', label: 'Second extended screen' },
+	{ id: 'network', label: 'Network stream (NDI / OMT)' },
+] as const
+
+export const DISPLAY_ELEMENT_CHOICES = [
+	{ id: 'timer', label: 'Timer' },
+	{ id: 'progressBar', label: 'Progress bar' },
+	{ id: 'message', label: 'Message' },
+	{ id: 'clock', label: 'Clock (timer layout)' },
+	{ id: 'clock2', label: 'Clock (full screen)' },
+	{ id: 'chrono', label: 'Chrono' },
+	{ id: 'additionalTime', label: 'Additional time' },
+	{ id: 'logo', label: 'Logo (timer layout)' },
+	{ id: 'logoFull', label: 'Logo (full screen)' },
+	{ id: 'blackMode', label: 'Black' },
+	{ id: 'testPattern', label: 'Test pattern' },
+] as const
+
+export const COLORED_DISPLAY_ELEMENT_CHOICES = [
+	{ id: 'timer', label: 'Timer' },
+	{ id: 'message', label: 'Message' },
+	{ id: 'clock', label: 'Clock (timer layout)' },
+	{ id: 'clock2', label: 'Clock (full screen)' },
+	{ id: 'chrono', label: 'Chrono' },
+	{ id: 'additionalTime', label: 'Additional time' },
+] as const
+
+export const OPERATOR_VIEW_CHOICES = [
+	{ id: 'operator', label: 'Operator' },
+	{ id: 'multiview', label: 'Multiview' },
+	{ id: 'presenter', label: 'Presenter' },
+	{ id: 'showcaller', label: 'Show caller' },
+	{ id: 'mobile', label: 'Mobile' },
+] as const

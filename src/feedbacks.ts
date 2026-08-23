@@ -1,14 +1,32 @@
 import { combineRgb } from '@companion-module/base'
-import { COMPARISON_CHOICES, DISPLAY_MODE_CHOICES, SESSION_MATCH_CHOICES } from './choices.js'
+import {
+	COMPARISON_CHOICES,
+	DISPLAY_ELEMENT_CHOICES,
+	DISPLAY_MODE_CHOICES,
+	END_ACTION_CHOICES,
+	LAYOUT_MODE_CHOICES,
+	OUTPUT_ROLE_CHOICES,
+	SESSION_MATCH_CHOICES,
+} from './choices.js'
 import {
 	compareNumbers,
 	compareStrings,
 	getActiveDisplayTimeState,
 	getCurrentPlaylistSession,
+	getOutputLayoutPresetIndex,
+	getPlaylistEndAction,
+	getPlaylistSessionByIndex,
+	getScreen2Mode,
 	inferDisplayMode,
+	inferLayoutMode,
+	isChronoColorThresholdsEnabled,
+	isClock12HourFormat,
+	isDisplayElementVisible,
+	isScreen2FollowingMain,
 	isTimerFinished,
 	normalizeHexColor,
 	safeNumber,
+	type OutputRole,
 } from './state.js'
 import type { ModuleInstance } from './main.js'
 
@@ -177,7 +195,7 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 				color: combineRgb(0, 0, 0),
 			},
 			options: [],
-			callback: () => self.runtimeState.qtimer?.chronoDisplayOptions?.colorThresholdsEnabled === true,
+			callback: () => isChronoColorThresholdsEnabled(self.runtimeState.qtimer),
 		},
 		chrono_threshold1_reached: {
 			name: 'Chrono reached threshold 1',
@@ -454,6 +472,301 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 					safeNumber(self.runtimeState.qtimer?.timeRemaining),
 					Number(feedback.options.seconds),
 				),
+		},
+		screen2_follow_main: {
+			name: 'Second screen mirrors the main screen',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(22, 163, 74),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [],
+			callback: () => isScreen2FollowingMain(self.runtimeState.qtimer),
+		},
+		screen2_mode: {
+			name: 'Second screen mode matches',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(139, 92, 246),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [
+				{
+					id: 'mode',
+					type: 'dropdown',
+					label: 'Mode',
+					default: 'clock',
+					choices: [...DISPLAY_MODE_CHOICES],
+				},
+				{
+					id: 'onlyWhenIndependent',
+					type: 'checkbox',
+					label: 'Only when the second screen is independent',
+					default: false,
+				},
+			],
+			callback: (feedback) => {
+				if (feedback.options.onlyWhenIndependent === true && isScreen2FollowingMain(self.runtimeState.qtimer)) {
+					return false
+				}
+
+				return getScreen2Mode(self.runtimeState.qtimer) === feedback.options.mode
+			},
+		},
+		output_layout_preset: {
+			name: 'Output layout preset matches',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(37, 99, 235),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [
+				{
+					id: 'role',
+					type: 'dropdown',
+					label: 'Output',
+					default: 'extended2',
+					choices: [...OUTPUT_ROLE_CHOICES],
+				},
+				{
+					id: 'index',
+					type: 'number',
+					label: 'Layout preset index (-1 = follows main layout)',
+					default: 0,
+					min: -1,
+					max: 11,
+				},
+			],
+			callback: (feedback) =>
+				getOutputLayoutPresetIndex(self.runtimeState.qtimer, feedback.options.role as OutputRole) ===
+				Number(feedback.options.index),
+		},
+		layout_mode: {
+			name: 'Active layout family matches',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(79, 70, 229),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [
+				{
+					id: 'mode',
+					type: 'dropdown',
+					label: 'Layout mode',
+					default: 'timer',
+					choices: [...LAYOUT_MODE_CHOICES],
+				},
+			],
+			callback: (feedback) => inferLayoutMode(self.runtimeState.qtimer) === feedback.options.mode,
+		},
+		display_element_visible: {
+			name: 'Display element is visible',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(14, 165, 233),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [
+				{
+					id: 'element',
+					type: 'dropdown',
+					label: 'Element',
+					default: 'timer',
+					choices: [...DISPLAY_ELEMENT_CHOICES],
+				},
+			],
+			callback: (feedback) => isDisplayElementVisible(self.runtimeState.qtimer, String(feedback.options.element ?? '')),
+		},
+		clock_12h_format: {
+			name: 'Clock uses 12h AM/PM format',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(2, 132, 199),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [],
+			callback: () => isClock12HourFormat(self.runtimeState.qtimer),
+		},
+		intermission_active: {
+			name: 'Intermission layout is active',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(234, 179, 8),
+				color: combineRgb(0, 0, 0),
+			},
+			options: [],
+			callback: () =>
+				self.runtimeState.qtimer?.intermissionActive === true || self.runtimeState.playlist?.intermissionMode === true,
+		},
+		playlist_session_enabled: {
+			name: 'Playlist session is enabled',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(34, 197, 94),
+				color: combineRgb(0, 0, 0),
+			},
+			options: [
+				{
+					id: 'index',
+					type: 'number',
+					label: 'Session index',
+					default: 0,
+					min: 0,
+					max: 999,
+				},
+			],
+			callback: (feedback) => {
+				const session = getPlaylistSessionByIndex(self.runtimeState.playlist, Number(feedback.options.index))
+				return session !== undefined && session.isEnabled !== false
+			},
+		},
+		playlist_end_action: {
+			name: 'Playlist end of session action matches',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(217, 119, 6),
+				color: combineRgb(0, 0, 0),
+			},
+			options: [
+				{
+					id: 'action',
+					type: 'dropdown',
+					label: 'End action',
+					default: 'intermission',
+					choices: [...END_ACTION_CHOICES],
+				},
+			],
+			callback: (feedback) => getPlaylistEndAction(self.runtimeState.playlist) === feedback.options.action,
+		},
+		audio_rule_enabled: {
+			name: 'Audio rule is enabled',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(13, 148, 136),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [
+				{
+					id: 'ruleId',
+					type: 'dropdown',
+					label: 'Rule',
+					default: '',
+					choices: self.getAudioRuleChoices(),
+					allowCustom: true,
+				},
+			],
+			callback: (feedback) => {
+				const ruleId = String(feedback.options.ruleId ?? '').trim()
+				if (!ruleId) {
+					return false
+				}
+
+				return (self.runtimeState.qtimer?.audioSettings?.triggerRules ?? []).some(
+					(rule) => rule.id === ruleId && rule.enabled === true,
+				)
+			},
+		},
+		chrono_time_compare: {
+			name: 'Chrono time comparison',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(168, 85, 247),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [
+				{
+					id: 'operator',
+					type: 'dropdown',
+					label: 'Operator',
+					default: 'gte',
+					choices: [...COMPARISON_CHOICES],
+				},
+				{
+					id: 'seconds',
+					type: 'number',
+					label: 'Seconds',
+					default: 300,
+					min: 0,
+					max: 86400,
+				},
+			],
+			callback: (feedback) =>
+				compareNumbers(
+					String(feedback.options.operator),
+					safeNumber(self.runtimeState.qtimer?.chronoTime),
+					Number(feedback.options.seconds),
+				),
+		},
+		additional_time_compare: {
+			name: 'Additional time comparison',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(245, 158, 11),
+				color: combineRgb(0, 0, 0),
+			},
+			options: [
+				{
+					id: 'operator',
+					type: 'dropdown',
+					label: 'Operator',
+					default: 'gte',
+					choices: [...COMPARISON_CHOICES],
+				},
+				{
+					id: 'seconds',
+					type: 'number',
+					label: 'Seconds',
+					default: 60,
+					min: 0,
+					max: 86400,
+				},
+			],
+			callback: (feedback) =>
+				compareNumbers(
+					String(feedback.options.operator),
+					safeNumber(self.runtimeState.qtimer?.additionalTimeValue),
+					Number(feedback.options.seconds),
+				),
+		},
+		ndi_running: {
+			name: 'NDI stream is running',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(190, 24, 93),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [],
+			callback: () => self.runtimeState.ndi?.running === true,
+		},
+		ndi_test_pattern_active: {
+			name: 'NDI test pattern is active',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(219, 39, 119),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [],
+			callback: () => self.runtimeState.ndi?.testPatternActive === true,
+		},
+		omt_running: {
+			name: 'OMT stream is running',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(6, 148, 162),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [],
+			callback: () => self.runtimeState.omt?.running === true,
+		},
+		omt_test_pattern_active: {
+			name: 'OMT test pattern is active',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(8, 178, 194),
+				color: combineRgb(0, 0, 0),
+			},
+			options: [],
+			callback: () => self.runtimeState.omt?.testPatternActive === true,
 		},
 		progress_percent_compare: {
 			name: 'Progress percent comparison',

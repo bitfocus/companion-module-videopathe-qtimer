@@ -4,6 +4,8 @@ export interface ModuleConfig {
 	host: string
 	port: number
 	pollInterval: number
+	pollStreams: boolean
+	apiPin: string
 }
 
 export function GetConfigFields(): SomeCompanionConfigField[] {
@@ -39,6 +41,23 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			default: 1000,
 			min: 250,
 			max: 10000,
+		},
+		{
+			type: 'secret-text',
+			id: 'apiPin',
+			label: 'API PIN',
+			width: 4,
+			default: '',
+			regex: '/^([0-9]{4,8})?$/',
+			tooltip:
+				'Only needed when QTimer has both a PIN and its "Protection API par PIN" option enabled, and Companion runs on another machine. QTimer never asks a PIN of requests coming from its own machine, so leave this blank for a local 127.0.0.1 connection.',
+		},
+		{
+			type: 'checkbox',
+			id: 'pollStreams',
+			label: 'Poll NDI / OMT stream status',
+			width: 4,
+			default: true,
 		},
 	]
 }

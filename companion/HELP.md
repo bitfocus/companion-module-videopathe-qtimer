@@ -9,16 +9,79 @@ App is available for free on videopathe.com for Windows / MacOS.
 - Default host: `127.0.0.1`
 - Default port: `2222`
 - The poll interval controls how often Companion refreshes the current state.
+- `Poll NDI / OMT stream status` can be turned off if you do not use the network outputs.
+- `API PIN` is only needed when QTimer's **Protection API par PIN** option is enabled and Companion runs on
+  another machine. See below.
+
+### PIN-Protected API
+
+QTimer can lock its network interfaces behind a 4 to 8 digit PIN (Settings, Security). Two separate switches
+matter here:
+
+- **PIN enabled** alone protects the web interface only. The REST API stays open, so this module keeps
+  working with the `API PIN` field left blank.
+- **Protection API par PIN** also protects `/api/*`. A remote Companion then has to authenticate, and the
+  `API PIN` field must hold the same PIN.
+
+Requests coming from QTimer's own machine are never asked for a PIN, so a `127.0.0.1` connection never needs
+this field.
+
+The module authenticates on the first `401`, keeps QTimer's 12 hour session cookie, and renews it the same
+way when it expires. A wrong or missing PIN shows up as an **authentication failure** with the reason in the
+module log, instead of looking like an unreachable host.
 
 ### What This Module Controls
 
 - Timer: start, pause, reset, set duration, adjust duration, presets, blink settings, additional time
 - Chrono: start, stop, reset, blink settings, color thresholds
 - Display: timer, clock, chrono, logo, black, test pattern
-- Messages: set, clear, blink, visibility, red alert
+- **Second extended screen: independent mode, mirror on/off, and per-output layout presets**
+- **Layout presets: apply any of the 12 presets to the main screen, the second screen, or the network output**
+- **Display elements: show/hide, recolour, progress-bar thresholds, raw `displaySettings` JSON**
+- **Clock: 12h AM/PM or 24h format**
+- Messages: set, clear, blink, visibility, red alert, preset messages, operator-view messages
 - Audio: enable, disable, stop, master volume, stop-current-on-play, rules on or off, play audio
-- Playlist: start, stop, previous, next, select session, enable or disable sessions, intermission and end-of-session options
-- Ready Pages: pre-grouped button banks for Main, Timer, Chrono, Audio, Playlist, Show, and Intermission
+- Playlist: start, stop, previous, next, select session, enable or disable sessions, intermission and end-of-session options, save
+- **Network streams: NDI and OMT status, test patterns, alpha channel, stop**
+- Presets grouped by Timer, Chrono, Display, Screen 2, Layouts, Message, Audio, Playlist, Network Streams, and Readouts
+
+### Second Extended Screen
+
+QTimer 2026.8 can drive a second extended screen with its own display mode while the
+running timer/chrono stays shared with the main screen.
+
+- `Display: Set mode` now has a **Target screen** option: `Main screen`, `Second extended screen`, or `Both screens`.
+  Sending a mode to the second screen automatically takes it out of mirror mode, exactly like the app does.
+- `Screen 2: Mirror main screen` toggles or forces the mirror behaviour back on.
+- `Layout: Apply preset to an output` assigns one of the 12 layout presets to `main`,
+  `extended2` (second screen) or `network` (NDI / OMT). For `main` the preset is applied live;
+  for the other two it is stored as the output's layout override, like the _Layouts per output_ popup.
+
+Matching feedbacks: `Second screen mirrors the main screen`, `Second screen mode matches`
+(with an _only when independent_ option so a button lights up only when the second screen
+is doing its own thing), and `Output layout preset matches`.
+
+Matching variables: `screen2_follow_main`, `screen2_mode`, `screen2_independent_mode`,
+`output_layout_extended`, `output_layout_extended2`, `output_layout_network`.
+
+### Live Dropdowns
+
+Several options are filled from QTimer itself and refresh while Companion is connected:
+
+- timer presets (`Timer: Recall preset`)
+- preset messages (`Message: Send a preset message`)
+- audio sounds (`Audio: Play sound`)
+- audio trigger rules (`Audio: Set one rule enabled` / `volume`, and the matching feedback)
+- playlist sessions (`Playlist: Select session by index`, `Playlist: Enable or disable session`)
+
+Each of these accepts a custom value too, so you can drive them from a Companion variable.
+
+### Toggles
+
+Actions that used to be enable-only now offer a `Toggle` choice that resolves against the
+value QTimer currently reports: audio enabled, stop-current-on-play, all audio rules, a single
+audio rule, chrono color thresholds, playlist session enabled, auto intermission, use default
+session duration, second-screen mirror, display element visibility, and the NDI/OMT test patterns.
 
 ### Variables
 
@@ -26,33 +89,45 @@ The module exposes useful runtime values such as:
 
 - remaining time and duration
 - elapsed time and progress percentage
-- current display mode
-- message text and color
-- message blinking state
-- chrono time
+- current display mode, layout family, and second screen mode
+- message text, color, visibility, and blinking state
+- chrono time and thresholds
 - additional time full/hours/minutes/seconds
 - audio enabled state and master volume
-- playlist current session name and index
+- playlist current and next session, end action, intermission countdown
+- NDI and OMT source name, resolution, frame rate, running state
 
 ### Feedbacks
 
 The module includes boolean feedbacks for common states:
 
 - connection status
-- current display mode
-- timer running or finished
-- chrono running
+- current display mode, layout family, and second screen mode/mirror
+- output layout preset per output
+- display element visibility and clock format
+- timer running or finished, remaining time and progress comparisons
+- chrono running, chrono time comparison, additional time comparison
 - message visibility and blinking
 - red alert active
-- audio enabled and rule state
-- playlist running or in intermission
+- audio enabled, all rules, and a single rule
+- playlist running, in intermission, session enabled, end action
+
+### Network Streams (NDI / OMT)
+
+Status is read-only by default and drives the `ndi_*` / `omt_*` variables and feedbacks.
+
+Only the self-contained stream controls are exposed as actions: **test pattern**, **alpha
+channel**, and **stop**. Starting a real NDI/OMT program stream is deliberately _not_ exposed,
+because QTimer's capture pipeline is set up inside the app (Electron IPC) before the HTTP
+`start` call — starting it over HTTP alone would publish a source with no frames. Start the
+stream from the QTimer _Network streams_ window, then use Companion to monitor or stop it.
 
 ### Known Design Choice
 
 The current implementation uses a hybrid approach:
 
 - WebSocket for live timer state refresh
-- HTTP polling for periodic fallback refresh and playlist state
+- HTTP polling for periodic fallback refresh, playlist, audio, and stream status
 
 ### Local Development With Companion
 
@@ -69,20 +144,12 @@ This module includes readout presets intended for stream deck style operation:
 - Additional time readout buttons for full time, hours, minutes, and seconds
 - Clock readout buttons for full time, hours, minutes, seconds, and AM PM
 - Chrono readout buttons for full time, hours, minutes, and seconds
-- Playlist and message readout buttons
+- Second screen mode and per-output layout readouts
+- NDI and OMT stream readouts
+- Playlist current/next session, intermission countdown, and message readout buttons
 
 These presets rely on module variables and can be styled further by the user after being placed.
 
-### Ready Page Presets
-
-The module also includes ready-made preset categories for faster deployment:
-
-- `Ready Page - Main`
-- `Ready Page - Timer`
-- `Ready Page - Chrono`
-- `Ready Page - Audio`
-- `Ready Page - Playlist`
-- `Ready Page - Show`
-- `Ready Page - Intermission`
-
-These categories duplicate a curated subset of presets so you can populate a Companion page quickly without assembling each button manually.
+The `Playlist` category repeats the playlist readouts (current session, session mode, next
+session, session chrono, intermission countdown, current display time) next to the transport
+buttons, so an intermission page can be built from that single category.

@@ -1,6 +1,6 @@
 import { InstanceBase, InstanceStatus, type SomeCompanionConfigField, runEntrypoint } from '@companion-module/base'
 import WebSocket, { type RawData } from 'ws'
-import { fetchJson, postJson, buildBaseUrl } from './api.js'
+import { AUTH_COOKIE_NAME, HttpStatusError, authenticateWithPin, buildBaseUrl, fetchJson } from './api.js'
 import { UpdateActions } from './actions.js'
 import { GetConfigFields, type ModuleConfig } from './config.js'
 import { UpdateFeedbacks } from './feedbacks.js'
@@ -11,10 +11,22 @@ import {
 	formatDuration,
 	getActiveDisplayTimeState,
 	getCurrentPlaylistSession,
+	getNextEnabledPlaylistSession,
+	getOutputLayoutPresetIndex,
+	getOutputLayoutPresetName,
+	getPlaylistEndAction,
+	getScreen2Mode,
 	inferDisplayMode,
+	inferLayoutMode,
+	isChronoColorThresholdsEnabled,
+	isClock12HourFormat,
+	isScreen2FollowingMain,
 	parseClockParts,
+	parseTimerPresetDuration,
 	type QTimerAudioSettingsResponse,
 	type QTimerAudioSound,
+	type QTimerNdiStatus,
+	type QTimerOmtStatus,
 	type PlaylistSnapshot,
 	type QTimerPlaylistStateResponse,
 	type QTimerStateSnapshot,
@@ -33,6 +45,13 @@ interface RuntimeState {
 	qtimer?: QTimerStateSnapshot
 	playlist?: PlaylistSnapshot
 	audioSounds?: QTimerAudioSound[]
+	ndi?: QTimerNdiStatus
+	omt?: QTimerOmtStatus
+}
+
+export interface DynamicChoice {
+	id: string
+	label: string
 }
 
 export class ModuleInstance extends InstanceBase<ModuleConfig> {
@@ -50,7 +69,10 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 	private websocket: WebSocket | undefined
 	private websocketReconnectTimer: NodeJS.Timeout | undefined
 	private websocketConnected = false
-	private audioPresetSignature = ''
+	private dynamicDefinitionSignature = ''
+	private authCookie = ''
+	private authInFlight: Promise<boolean> | undefined
+	private authFailed = false
 
 	constructor(internal: unknown) {
 		super(internal)
@@ -97,6 +119,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		this.fetchAbortController = new AbortController()
 		this.pollInFlight = false
 		this.config = config
+		this.resetAuthentication()
 		this.runtimeState = {
 			connected: false,
 			lastError: null,
@@ -105,7 +128,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		}
 		this.updateVariablesFromState()
 		this.checkFeedbacks()
-		this.refreshDynamicPresets()
+		this.refreshDynamicDefinitions()
 		this.startPolling(true)
 		this.connectWebSocket()
 	}
@@ -130,12 +153,152 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		return this.runtimeState.audioSounds ?? []
 	}
 
+	/** Audio trigger rules, labelled `event -> sound` because QTimer rules carry no name. */
+	getAudioRuleChoices(): DynamicChoice[] {
+		const sounds = new Map(this.getAvailableAudioSounds().map((sound) => [sound.id, sound.label]))
+
+		return (this.runtimeState.qtimer?.audioSettings?.triggerRules ?? [])
+			.filter((rule) => typeof rule.id === 'string' && rule.id.trim().length > 0)
+			.map((rule, index) => {
+				const id = String(rule.id).trim()
+				const explicitLabel = (rule.label ?? rule.name ?? '').trim()
+				if (explicitLabel) {
+					return { id, label: explicitLabel }
+				}
+
+				const event = (rule as { event?: string }).event ?? `rule ${index + 1}`
+				const soundLabel = rule.soundId ? (sounds.get(rule.soundId) ?? rule.soundId) : ''
+				return { id, label: soundLabel ? `${event} -> ${soundLabel}` : String(event) }
+			})
+	}
+
+	/** Timer presets exposed by QTimer, keyed by their index (the API only accepts indexes). */
+	getTimerPresetChoices(): DynamicChoice[] {
+		const presets = this.runtimeState.qtimer?.presets
+		const labels = Array.isArray(presets) && presets.length > 0 ? presets : []
+
+		if (labels.length === 0) {
+			return Array.from({ length: 15 }, (_unused, index) => ({
+				id: String(index),
+				label: `Preset ${index + 1}`,
+			}))
+		}
+
+		return labels.map((preset, index) => ({
+			id: String(index),
+			label: `${index + 1}. ${formatDuration(parseTimerPresetDuration(preset), true)}`,
+		}))
+	}
+
+	getPresetMessageChoices(): DynamicChoice[] {
+		return (this.runtimeState.qtimer?.presetMessages ?? [])
+			.filter((message) => typeof message === 'string' && message.trim().length > 0)
+			.map((message) => ({ id: message, label: message }))
+	}
+
+	getPlaylistSessionChoices(): DynamicChoice[] {
+		return (this.runtimeState.playlist?.sessions ?? []).map((session, index) => ({
+			id: String(index),
+			label: `${index + 1}. ${session?.name?.trim() || 'Untitled session'}`,
+		}))
+	}
+
 	updateVariableDefinitions(): void {
 		UpdateVariableDefinitions(this)
 	}
 
 	private hasValidConfig(): boolean {
 		return !!this.config?.host?.trim() && safeNumber(this.config?.port) > 0
+	}
+
+	private get apiPin(): string {
+		return String(this.config?.apiPin ?? '').trim()
+	}
+
+	private resetAuthentication(): void {
+		this.authCookie = ''
+		this.authInFlight = undefined
+		this.authFailed = false
+	}
+
+	/** Adds the QTimer session cookie to a request once the PIN has been exchanged for one. */
+	private withAuth(init: RequestInit = {}): RequestInit {
+		if (!this.authCookie) {
+			return init
+		}
+
+		return {
+			...init,
+			headers: {
+				...(init.headers ?? {}),
+				cookie: `${AUTH_COOKIE_NAME}=${this.authCookie}`,
+			},
+		}
+	}
+
+	/**
+	 * Exchanges the configured PIN for a session cookie. Concurrent callers share one request,
+	 * so a poll that fires five parallel 401s only triggers a single authentication.
+	 */
+	private async authenticate(): Promise<boolean> {
+		const pin = this.apiPin
+		if (!pin) {
+			return false
+		}
+
+		this.authInFlight ??= (async () => {
+			try {
+				const cookie = await authenticateWithPin(this.getBaseUrl(), pin)
+				if (!cookie) {
+					// QTimer accepted the call but issued no cookie, which means no PIN is set on it.
+					this.log('debug', 'QTimer did not issue a session cookie; PIN protection appears to be off')
+					this.authFailed = false
+					return false
+				}
+
+				this.authCookie = cookie
+				this.authFailed = false
+				this.log('info', 'Authenticated against QTimer with the configured PIN')
+				return true
+			} catch (error) {
+				this.authCookie = ''
+				this.authFailed = true
+				this.log('error', `PIN authentication failed: ${this.formatError(error)}`)
+				return false
+			} finally {
+				this.authInFlight = undefined
+			}
+		})()
+
+		return this.authInFlight
+	}
+
+	/**
+	 * Performs a request, and on a 401 from QTimer's PIN middleware authenticates once and retries.
+	 * The cookie QTimer issues lives 12 hours, so this is also what silently renews an expired one.
+	 */
+	private async apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+		const url = `${this.getBaseUrl()}${path}`
+
+		try {
+			return await fetchJson<T>(url, this.withAuth(init))
+		} catch (error) {
+			if (!(error instanceof HttpStatusError) || error.status !== 401) {
+				throw error
+			}
+
+			if (!this.apiPin) {
+				throw new Error(
+					'QTimer requires a PIN for its API ("Protection API par PIN" is enabled). Set the API PIN in this connection config.',
+				)
+			}
+
+			if (!(await this.authenticate())) {
+				throw new Error('QTimer rejected the configured API PIN')
+			}
+
+			return await fetchJson<T>(url, this.withAuth(init))
+		}
 	}
 
 	private stopPolling(): void {
@@ -178,7 +341,13 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		}
 
 		const wsUrl = `ws://${this.config.host}:${safeNumber(this.config.port, 2222)}/?client=companion-module`
-		const websocket = new WebSocket(wsUrl, { handshakeTimeout: 10000 })
+		// QTimer's PIN middleware is Express-only and never sees the upgrade request, so the socket
+		// stays reachable without a PIN. The cookie is sent anyway when we hold one, so the module
+		// keeps working if QTimer ever starts guarding the upgrade too.
+		const websocket = new WebSocket(wsUrl, {
+			handshakeTimeout: 10000,
+			headers: this.authCookie ? { cookie: `${AUTH_COOKIE_NAME}=${this.authCookie}` } : undefined,
+		})
 		this.websocket = websocket
 
 		websocket.on('open', () => {
@@ -239,13 +408,13 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 				lastError: null,
 				serverUrl: this.runtimeState.serverUrl || this.getBaseUrl(),
 				lastUpdated: new Date().toISOString(),
-				qtimer: payload.data as QTimerStateSnapshot,
+				qtimer: payload.data,
 			}
 
 			this.updateStatus(InstanceStatus.Ok)
 			this.updateVariablesFromState()
 			this.checkFeedbacks()
-			this.refreshDynamicPresets()
+			this.refreshDynamicDefinitions()
 		} catch (error) {
 			this.log('debug', `WebSocket message parse failed: ${this.formatError(error)}`)
 		}
@@ -298,24 +467,23 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 
 		try {
 			const baseUrl = this.getBaseUrl()
-			const [statusResponse, playlistResponse, audioResponse] = await Promise.all([
-				fetchJson<QTimerStatusResponse>(`${baseUrl}/api/status`, { signal }),
-				fetchJson<QTimerPlaylistStateResponse>(`${baseUrl}/api/playlist/state`, { signal }).catch((error) => {
+			const pollStreams = this.config.pollStreams !== false
+			const optional = async <T>(path: string, label: string): Promise<T | undefined> =>
+				this.apiFetch<T>(path, { signal }).catch((error) => {
 					if (signal.aborted && error instanceof Error && error.name === 'AbortError') {
 						return undefined
 					}
 
-					this.log('debug', `Playlist refresh failed: ${this.formatError(error)}`)
+					this.log('debug', `${label} refresh failed: ${this.formatError(error)}`)
 					return undefined
-				}),
-				fetchJson<QTimerAudioSettingsResponse>(`${baseUrl}/api/audio/settings`, { signal }).catch((error) => {
-					if (signal.aborted && error instanceof Error && error.name === 'AbortError') {
-						return undefined
-					}
+				})
 
-					this.log('debug', `Audio refresh failed: ${this.formatError(error)}`)
-					return undefined
-				}),
+			const [statusResponse, playlistResponse, audioResponse, ndiResponse, omtResponse] = await Promise.all([
+				this.apiFetch<QTimerStatusResponse>('/api/status', { signal }),
+				optional<QTimerPlaylistStateResponse>('/api/playlist/state', 'Playlist'),
+				optional<QTimerAudioSettingsResponse>('/api/audio/settings', 'Audio'),
+				pollStreams ? optional<QTimerNdiStatus>('/api/ndi/status', 'NDI') : Promise.resolve(undefined),
+				pollStreams ? optional<QTimerOmtStatus>('/api/omt/status', 'OMT') : Promise.resolve(undefined),
 			])
 
 			if (requestController !== this.fetchAbortController || signal.aborted) {
@@ -337,12 +505,14 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 				},
 				playlist: playlistResponse?.playlist ?? this.runtimeState.playlist,
 				audioSounds,
+				ndi: pollStreams ? (ndiResponse ?? this.runtimeState.ndi) : undefined,
+				omt: pollStreams ? (omtResponse ?? this.runtimeState.omt) : undefined,
 			}
 
 			this.updateStatus(InstanceStatus.Ok)
 			this.updateVariablesFromState()
 			this.checkFeedbacks()
-			this.refreshDynamicPresets()
+			this.refreshDynamicDefinitions()
 		} catch (error) {
 			if (requestController !== this.fetchAbortController || requestController.signal.aborted) {
 				return
@@ -355,7 +525,10 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 				serverUrl: this.getBaseUrl(),
 			}
 
-			this.updateStatus(InstanceStatus.ConnectionFailure, this.runtimeState.lastError ?? undefined)
+			this.updateStatus(
+				this.isAuthError(error) ? InstanceStatus.AuthenticationFailure : InstanceStatus.ConnectionFailure,
+				this.runtimeState.lastError ?? undefined,
+			)
 			this.updateVariablesFromState()
 			this.checkFeedbacks()
 		} finally {
@@ -369,9 +542,13 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			throw new Error('Invalid module configuration')
 		}
 
-		const baseUrl = this.getBaseUrl()
 		try {
-			await postJson<unknown>(`${baseUrl}${path}`, body)
+			const init: RequestInit = { method: 'POST' }
+			if (body !== undefined) {
+				init.body = JSON.stringify(body)
+			}
+
+			await this.apiFetch<unknown>(path, init)
 			void this.refreshAllState()
 		} catch (error) {
 			const message = this.formatError(error)
@@ -380,11 +557,21 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 				connected: false,
 				lastError: message,
 			}
-			this.updateStatus(InstanceStatus.ConnectionFailure)
+			this.updateStatus(
+				this.isAuthError(error) ? InstanceStatus.AuthenticationFailure : InstanceStatus.ConnectionFailure,
+			)
 			this.updateVariablesFromState()
 			this.checkFeedbacks()
 			throw error
 		}
+	}
+
+	private isAuthError(error: unknown): boolean {
+		if (error instanceof HttpStatusError) {
+			return error.status === 401 || error.status === 403
+		}
+
+		return this.authFailed
 	}
 
 	private formatError(error: unknown): string {
@@ -463,15 +650,41 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		)
 	}
 
-	private refreshDynamicPresets(): void {
-		const signature = (this.runtimeState.audioSounds ?? []).map((sound) => `${sound.id}:${sound.label}`).join('|')
+	/**
+	 * Actions and presets embed live QTimer lists (sounds, audio rules, timer presets,
+	 * preset messages, playlist sessions). Rebuild them only when one of those lists
+	 * actually changed, so a 1 Hz poll does not churn the whole definition set.
+	 */
+	private refreshDynamicDefinitions(): void {
+		const signature = [
+			(this.runtimeState.audioSounds ?? []).map((sound) => `${sound.id}:${sound.label}`).join('|'),
+			this.getAudioRuleChoices()
+				.map((choice) => `${choice.id}:${choice.label}`)
+				.join('|'),
+			(this.runtimeState.qtimer?.presets ?? []).join('|'),
+			(this.runtimeState.qtimer?.presetMessages ?? []).join('|'),
+			(this.runtimeState.playlist?.sessions ?? []).map((session) => session?.name ?? '').join('|'),
+		].join('||')
 
-		if (signature === this.audioPresetSignature) {
+		if (signature === this.dynamicDefinitionSignature) {
 			return
 		}
 
-		this.audioPresetSignature = signature
+		this.dynamicDefinitionSignature = signature
+		this.updateActions()
+		this.updateFeedbacks()
 		this.updatePresets()
+	}
+
+	/** "Main layout", "#3", or "#3 - <preset name>" depending on what QTimer reports. */
+	private formatOutputLayout(role: 'extended' | 'extended2' | 'network'): string {
+		const presetIndex = getOutputLayoutPresetIndex(this.runtimeState.qtimer, role)
+		if (presetIndex < 0) {
+			return 'Main layout'
+		}
+
+		const name = getOutputLayoutPresetName(this.runtimeState.qtimer, role)
+		return name ? `#${presetIndex + 1} - ${name}` : `#${presetIndex + 1}`
 	}
 
 	private updateVariablesFromState(): void {
@@ -496,6 +709,10 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		const chronoShowHours = qtimer?.chronoDisplayOptions?.showHours !== false
 		const displayMode = inferDisplayMode(qtimer)
 		const displayTime = getActiveDisplayTimeState(qtimer)
+		const ndi = this.runtimeState.ndi
+		const omt = this.runtimeState.omt
+		const nextSession = getNextEnabledPlaylistSession(playlist)
+		const intermissionRemaining = safeNumber(playlist?.intersessionTimeRemaining)
 		const timerParts = splitDurationParts(remaining)
 		const durationParts = splitDurationParts(duration)
 		const elapsedParts = splitDurationParts(elapsed)
@@ -563,7 +780,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			chrono_full_formatted: formatDuration(chronoSeconds, true),
 			chrono_blink_enabled: qtimer?.chronoDisplayOptions?.blinkOnEnd === true,
 			chrono_blink_active: qtimer?.chronoDisplayOptions?.blinkState === true,
-			chrono_color_thresholds_enabled: qtimer?.chronoDisplayOptions?.colorThresholdsEnabled === true,
+			chrono_color_thresholds_enabled: isChronoColorThresholdsEnabled(qtimer),
 			chrono_threshold1: safeNumber(qtimer?.chronoColorThresholds?.threshold1),
 			chrono_threshold1_color: qtimer?.chronoColorThresholds?.color1 ?? '',
 			chrono_threshold2: safeNumber(qtimer?.chronoColorThresholds?.threshold2),
@@ -591,6 +808,41 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			playlist_chrono_hours: playlistChronoParts.hoursText,
 			playlist_chrono_minutes: playlistChronoParts.minutesText,
 			playlist_chrono_seconds_component: playlistChronoParts.secondsText,
+			playlist_next_session_name: nextSession?.name ?? '',
+			playlist_next_session_index: safeNumber(nextSession?.index, -1),
+			playlist_end_action: getPlaylistEndAction(playlist),
+			playlist_auto_mode: playlist?.autoModeChangeMode ?? '',
+			playlist_auto_intermission: playlist?.autoIntermissionEnabled === true,
+			playlist_intermission_duration: safeNumber(playlist?.intermissionDuration),
+			playlist_intermission_remaining: intermissionRemaining,
+			playlist_intermission_remaining_formatted: formatDuration(intermissionRemaining, false),
+			playlist_default_session_duration: safeNumber(playlist?.defaultSessionDuration),
+			playlist_default_additional_time: safeNumber(playlist?.defaultAdditionalTimeValue),
+			playlist_session_log_count: playlist?.sessionLog?.length ?? 0,
+			message_visible: qtimer?.messageVisible === true,
+			intermission_active: qtimer?.intermissionActive === true,
+			layout_mode: inferLayoutMode(qtimer) ?? 'none',
+			clock_12h_format: isClock12HourFormat(qtimer),
+			screen2_follow_main: isScreen2FollowingMain(qtimer),
+			screen2_mode: getScreen2Mode(qtimer),
+			screen2_independent_mode: qtimer?.screen2?.mode ?? '',
+			output_layout_extended: this.formatOutputLayout('extended'),
+			output_layout_extended2: this.formatOutputLayout('extended2'),
+			output_layout_network: this.formatOutputLayout('network'),
+			timer_preset_count: qtimer?.presets?.length ?? 0,
+			preset_message_count: qtimer?.presetMessages?.length ?? 0,
+			ndi_available: ndi?.ndiRuntimeAvailable === true,
+			ndi_running: ndi?.running === true,
+			ndi_test_pattern: ndi?.testPatternActive === true,
+			ndi_source_name: ndi?.sourceName ?? '',
+			ndi_resolution: ndi?.width && ndi?.height ? `${ndi.width}x${ndi.height}` : '',
+			ndi_frame_rate: safeNumber(ndi?.actualFrameRate, safeNumber(ndi?.frameRate)),
+			omt_available: omt?.runtimeAvailable === true || omt?.available === true,
+			omt_running: omt?.running === true,
+			omt_test_pattern: omt?.testPatternActive === true,
+			omt_source_name: omt?.sourceName ?? '',
+			omt_resolution: omt?.width && omt?.height ? `${omt.width}x${omt.height}` : '',
+			omt_frame_rate: safeNumber(omt?.frameRate),
 		})
 	}
 }

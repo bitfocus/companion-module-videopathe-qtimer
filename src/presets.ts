@@ -23,13 +23,27 @@ export function UpdatePresets(self: ModuleInstance): void {
 	const displayTimeFeedbacks = [{ feedbackId: 'display_time_dynamic', options: {} }] satisfies CompanionPresetFeedback[]
 
 	const presets: CompanionPresetDefinitions = {}
-	const readyPageMainCategory = 'Ready Page - Main'
-	const readyPageTimerCategory = 'Ready Page - Timer'
-	const readyPageChronoCategory = 'Ready Page - Chrono'
-	const readyPageAudioCategory = 'Ready Page - Audio'
-	const readyPagePlaylistCategory = 'Ready Page - Playlist'
-	const readyPageShowCategory = 'Ready Page - Show'
-	const readyPageIntermissionCategory = 'Ready Page - Intermission'
+	const playlistCategory = 'Playlist'
+	const screen2Category = 'Screen 2'
+	const layoutCategory = 'Layouts'
+	const displayCategory = 'Display'
+	const networkCategory = 'Network Streams'
+	const displayModeChoices = [
+		{ id: 'timer', label: 'TIMER' },
+		{ id: 'clock', label: 'CLOCK' },
+		{ id: 'chrono', label: 'CHRONO' },
+		{ id: 'logo', label: 'LOGO' },
+		{ id: 'black', label: 'BLACK' },
+		{ id: 'mire', label: 'MIRE' },
+	] as const
+	const modeBackgrounds: Record<string, number> = {
+		timer: combineRgb(30, 64, 175),
+		clock: combineRgb(13, 148, 136),
+		chrono: combineRgb(126, 34, 206),
+		logo: combineRgb(120, 53, 15),
+		black: combineRgb(24, 24, 27),
+		mire: combineRgb(100, 116, 139),
+	}
 
 	function createActionPreset(
 		id: string,
@@ -429,7 +443,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 		combineRgb(22, 163, 74),
 		combineRgb(255, 255, 255),
 		'set_display_mode',
-		{ mode: 'timer' },
+		{ mode: 'timer', target: 'main' },
 		[
 			{
 				feedbackId: 'display_mode',
@@ -447,7 +461,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 		combineRgb(147, 51, 234),
 		combineRgb(255, 255, 255),
 		'set_display_mode',
-		{ mode: 'clock' },
+		{ mode: 'clock', target: 'main' },
 		[
 			{
 				feedbackId: 'display_mode',
@@ -465,7 +479,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 		combineRgb(220, 38, 38),
 		combineRgb(255, 255, 255),
 		'set_display_mode',
-		{ mode: 'chrono' },
+		{ mode: 'chrono', target: 'main' },
 		[
 			{
 				feedbackId: 'display_mode',
@@ -483,7 +497,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 		combineRgb(37, 99, 235),
 		combineRgb(255, 255, 255),
 		'set_display_mode',
-		{ mode: 'logo' },
+		{ mode: 'logo', target: 'main' },
 		[
 			{
 				feedbackId: 'display_mode',
@@ -501,7 +515,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 		combineRgb(17, 24, 39),
 		combineRgb(255, 255, 255),
 		'set_display_mode',
-		{ mode: 'black' },
+		{ mode: 'black', target: 'main' },
 		[
 			{
 				feedbackId: 'display_mode',
@@ -519,7 +533,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 		combineRgb(202, 138, 4),
 		combineRgb(255, 255, 255),
 		'set_display_mode',
-		{ mode: 'mire' },
+		{ mode: 'mire', target: 'main' },
 		[
 			{
 				feedbackId: 'display_mode',
@@ -704,7 +718,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 
 	createActionPreset(
 		'playlist_start',
-		'Playlist',
+		playlistCategory,
 		'Start playlist',
 		'PLAYLIST\nSTART',
 		combineRgb(249, 115, 22),
@@ -721,7 +735,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 	)
 	createActionPreset(
 		'playlist_stop',
-		'Playlist',
+		playlistCategory,
 		'Stop playlist',
 		'PLAYLIST\nSTOP',
 		combineRgb(194, 65, 12),
@@ -730,7 +744,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 	)
 	createActionPreset(
 		'playlist_prev',
-		'Playlist',
+		playlistCategory,
 		'Previous playlist session',
 		'PLAYLIST\nPREV',
 		combineRgb(180, 83, 9),
@@ -739,7 +753,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 	)
 	createActionPreset(
 		'playlist_next',
-		'Playlist',
+		playlistCategory,
 		'Next playlist session',
 		'PLAYLIST\nNEXT',
 		combineRgb(249, 115, 22),
@@ -748,7 +762,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 	)
 	createActionPreset(
 		'playlist_intermission_toggle',
-		'Playlist',
+		playlistCategory,
 		'Toggle intermission',
 		'INTER\nTOGGLE',
 		combineRgb(234, 179, 8),
@@ -762,6 +776,241 @@ export function UpdatePresets(self: ModuleInstance): void {
 				style: { bgcolor: combineRgb(250, 204, 21), color: combineRgb(0, 0, 0) },
 			},
 		],
+	)
+
+	createActionPreset(
+		'screen2_follow_toggle',
+		screen2Category,
+		'Toggle second screen mirror',
+		'SCR2\nMIRROR',
+		combineRgb(21, 128, 61),
+		combineRgb(255, 255, 255),
+		'screen2_set_follow_main',
+		{ state: 'toggle' },
+		[
+			{
+				feedbackId: 'screen2_follow_main',
+				options: {},
+				style: { bgcolor: combineRgb(34, 197, 94), color: combineRgb(0, 0, 0) },
+			},
+		],
+	)
+	createActionPreset(
+		'screen2_follow_on',
+		screen2Category,
+		'Second screen mirrors main screen',
+		'SCR2\nFOLLOW',
+		combineRgb(22, 101, 52),
+		combineRgb(255, 255, 255),
+		'screen2_set_follow_main',
+		{ state: 'on' },
+		[
+			{
+				feedbackId: 'screen2_follow_main',
+				options: {},
+				style: { bgcolor: combineRgb(34, 197, 94), color: combineRgb(0, 0, 0) },
+			},
+		],
+	)
+
+	for (const mode of displayModeChoices) {
+		createActionPreset(
+			`screen2_mode_${mode.id}`,
+			screen2Category,
+			`Second screen: ${mode.label.toLowerCase()} mode`,
+			`SCR2\n${mode.label}`,
+			modeBackgrounds[mode.id],
+			combineRgb(255, 255, 255),
+			'set_display_mode',
+			{ mode: mode.id, target: 'screen2' },
+			[
+				{
+					feedbackId: 'screen2_mode',
+					options: { mode: mode.id, onlyWhenIndependent: true },
+					style: { bgcolor: combineRgb(139, 92, 246), color: combineRgb(255, 255, 255) },
+				},
+			],
+			'14',
+		)
+		createActionPreset(
+			`both_mode_${mode.id}`,
+			screen2Category,
+			`Both screens: ${mode.label.toLowerCase()} mode`,
+			`BOTH\n${mode.label}`,
+			combineRgb(55, 65, 81),
+			combineRgb(255, 255, 255),
+			'set_display_mode',
+			{ mode: mode.id, target: 'both' },
+			[
+				{
+					feedbackId: 'display_mode',
+					options: { mode: mode.id },
+					style: { bgcolor: modeBackgrounds[mode.id], color: combineRgb(255, 255, 255) },
+				},
+			],
+			'14',
+		)
+	}
+
+	for (const target of [
+		{ id: 'main', short: 'MAIN' },
+		{ id: 'extended2', short: 'SCR2' },
+		{ id: 'network', short: 'NET' },
+	] as const) {
+		for (let presetIndex = 0; presetIndex < 4; presetIndex++) {
+			createActionPreset(
+				`layout_${target.id}_timer_${presetIndex}`,
+				layoutCategory,
+				`Apply timer layout preset ${presetIndex + 1} to ${target.short}`,
+				`${target.short}\nLAY ${presetIndex + 1}`,
+				combineRgb(30, 58, 138),
+				combineRgb(255, 255, 255),
+				'layout_preset_apply',
+				{ mode: 'timer', index: String(presetIndex), target: target.id },
+				target.id === 'main'
+					? []
+					: [
+							{
+								feedbackId: 'output_layout_preset',
+								options: { role: target.id, index: presetIndex },
+								style: { bgcolor: combineRgb(37, 99, 235), color: combineRgb(255, 255, 255) },
+							},
+						],
+				'14',
+			)
+		}
+	}
+
+	for (const element of [
+		{ id: 'timer', short: 'TIMER' },
+		{ id: 'progressBar', short: 'BAR' },
+		{ id: 'message', short: 'MSG' },
+		{ id: 'clock', short: 'CLOCK' },
+		{ id: 'additionalTime', short: 'ADDT' },
+		{ id: 'logo', short: 'LOGO' },
+	] as const) {
+		createActionPreset(
+			`display_toggle_${element.id}`,
+			displayCategory,
+			`Toggle ${element.short.toLowerCase()} element visibility`,
+			`SHOW\n${element.short}`,
+			combineRgb(30, 41, 59),
+			combineRgb(255, 255, 255),
+			'display_set_element_visibility',
+			{ element: element.id, state: 'toggle' },
+			[
+				{
+					feedbackId: 'display_element_visible',
+					options: { element: element.id },
+					style: { bgcolor: combineRgb(14, 165, 233), color: combineRgb(255, 255, 255) },
+				},
+			],
+			'14',
+		)
+	}
+
+	createActionPreset(
+		'display_clock_12h',
+		displayCategory,
+		'Toggle clock 12h AM/PM format',
+		'CLOCK\n12/24H',
+		combineRgb(7, 89, 133),
+		combineRgb(255, 255, 255),
+		'clock_set_12h_format',
+		{ state: 'toggle' },
+		[
+			{
+				feedbackId: 'clock_12h_format',
+				options: {},
+				style: { bgcolor: combineRgb(2, 132, 199), color: combineRgb(255, 255, 255) },
+			},
+		],
+		'14',
+	)
+	createActionPreset(
+		'display_timer_color_sync',
+		displayCategory,
+		'Toggle timer color sync with progress',
+		'TIMER\nSYNC',
+		combineRgb(51, 65, 85),
+		combineRgb(255, 255, 255),
+		'display_set_timer_color_sync',
+		{ state: 'toggle' },
+		[],
+		'14',
+	)
+
+	createActionPreset(
+		'ndi_test_pattern_toggle',
+		networkCategory,
+		'Toggle NDI test pattern',
+		'NDI\nTEST',
+		combineRgb(157, 23, 77),
+		combineRgb(255, 255, 255),
+		'ndi_test_pattern',
+		{ state: 'toggle', showAlphaZone: false, alphaZonePosition: 'left' },
+		[
+			{
+				feedbackId: 'ndi_test_pattern_active',
+				options: {},
+				style: { bgcolor: combineRgb(219, 39, 119), color: combineRgb(255, 255, 255) },
+			},
+		],
+		'14',
+	)
+	createActionPreset(
+		'ndi_stop_stream',
+		networkCategory,
+		'Stop NDI stream',
+		'NDI\nSTOP',
+		combineRgb(127, 29, 29),
+		combineRgb(255, 255, 255),
+		'ndi_stop',
+		{},
+		[
+			{
+				feedbackId: 'ndi_running',
+				options: {},
+				style: { bgcolor: combineRgb(190, 24, 93), color: combineRgb(255, 255, 255) },
+			},
+		],
+		'14',
+	)
+	createActionPreset(
+		'omt_test_pattern_toggle',
+		networkCategory,
+		'Toggle OMT test pattern',
+		'OMT\nTEST',
+		combineRgb(15, 118, 130),
+		combineRgb(255, 255, 255),
+		'omt_test_pattern',
+		{ state: 'toggle', showAlphaZone: false },
+		[
+			{
+				feedbackId: 'omt_test_pattern_active',
+				options: {},
+				style: { bgcolor: combineRgb(8, 178, 194), color: combineRgb(0, 0, 0) },
+			},
+		],
+		'14',
+	)
+	createActionPreset(
+		'omt_stop_stream',
+		networkCategory,
+		'Stop OMT stream',
+		'OMT\nSTOP',
+		combineRgb(127, 29, 29),
+		combineRgb(255, 255, 255),
+		'omt_stop',
+		{},
+		[
+			{
+				feedbackId: 'omt_running',
+				options: {},
+				style: { bgcolor: combineRgb(6, 148, 162), color: combineRgb(255, 255, 255) },
+			},
+		],
+		'14',
 	)
 
 	createReadoutPreset(
@@ -1016,6 +1265,83 @@ export function UpdatePresets(self: ModuleInstance): void {
 	)
 
 	createReadoutPreset(
+		'readout_screen2_mode',
+		'Second screen mode readout',
+		`SCR2\n${variable('screen2_mode')}`,
+		combineRgb(17, 24, 39),
+		'14',
+		[
+			{
+				feedbackId: 'screen2_follow_main',
+				options: {},
+				style: { bgcolor: combineRgb(21, 128, 61), color: combineRgb(255, 255, 255) },
+			},
+		],
+	)
+	createReadoutPreset(
+		'readout_output_layout_extended2',
+		'Second screen layout readout',
+		`SCR2 LAYOUT\n${variable('output_layout_extended2')}`,
+		combineRgb(17, 24, 39),
+		'14',
+	)
+	createReadoutPreset(
+		'readout_output_layout_network',
+		'Network output layout readout',
+		`NET LAYOUT\n${variable('output_layout_network')}`,
+		combineRgb(17, 24, 39),
+		'14',
+	)
+	createReadoutPreset(
+		'readout_ndi_status',
+		'NDI stream readout',
+		`NDI\n${variable('ndi_source_name')}\n${variable('ndi_resolution')}`,
+		combineRgb(17, 24, 39),
+		'14',
+		[
+			{
+				feedbackId: 'ndi_running',
+				options: {},
+				style: { bgcolor: combineRgb(190, 24, 93), color: combineRgb(255, 255, 255) },
+			},
+		],
+	)
+	createReadoutPreset(
+		'readout_omt_status',
+		'OMT stream readout',
+		`OMT\n${variable('omt_source_name')}\n${variable('omt_resolution')}`,
+		combineRgb(17, 24, 39),
+		'14',
+		[
+			{
+				feedbackId: 'omt_running',
+				options: {},
+				style: { bgcolor: combineRgb(6, 148, 162), color: combineRgb(255, 255, 255) },
+			},
+		],
+	)
+	createReadoutPreset(
+		'readout_playlist_next_session',
+		'Next playlist session readout',
+		`NEXT\n${variable('playlist_next_session_name')}`,
+		combineRgb(17, 24, 39),
+		'14',
+	)
+	createReadoutPreset(
+		'readout_playlist_intermission',
+		'Playlist intermission remaining readout',
+		`INTER\n${variable('playlist_intermission_remaining_formatted')}`,
+		combineRgb(17, 24, 39),
+		'14',
+		[
+			{
+				feedbackId: 'intermission_active',
+				options: {},
+				style: { bgcolor: combineRgb(234, 179, 8), color: combineRgb(0, 0, 0) },
+			},
+		],
+	)
+	createReadoutPreset(
 		'readout_playlist_session',
 		'Playlist current session name',
 		variable('playlist_current_session_name'),
@@ -1073,379 +1399,6 @@ export function UpdatePresets(self: ModuleInstance): void {
 		],
 	)
 
-	clonePresetToCategory('mode_timer', 'ready_main_mode_timer', readyPageMainCategory, 'Ready page main: timer mode')
-	clonePresetToCategory('mode_clock', 'ready_main_mode_clock', readyPageMainCategory, 'Ready page main: clock mode')
-	clonePresetToCategory('mode_chrono', 'ready_main_mode_chrono', readyPageMainCategory, 'Ready page main: chrono mode')
-	clonePresetToCategory('mode_logo', 'ready_main_mode_logo', readyPageMainCategory, 'Ready page main: logo mode')
-	clonePresetToCategory('timer_start', 'ready_main_timer_start', readyPageMainCategory, 'Ready page main: timer start')
-	clonePresetToCategory('timer_pause', 'ready_main_timer_pause', readyPageMainCategory, 'Ready page main: timer pause')
-	clonePresetToCategory('timer_reset', 'ready_main_timer_reset', readyPageMainCategory, 'Ready page main: timer reset')
-	clonePresetToCategory(
-		'message_show',
-		'ready_main_message_show',
-		readyPageMainCategory,
-		'Ready page main: message show',
-	)
-	clonePresetToCategory(
-		'message_alert',
-		'ready_main_message_alert',
-		readyPageMainCategory,
-		'Ready page main: message alert',
-	)
-	clonePresetToCategory(
-		'readout_timer_full',
-		'ready_main_timer_full',
-		readyPageMainCategory,
-		'Ready page main: timer full readout',
-	)
-	clonePresetToCategory(
-		'readout_clock_full',
-		'ready_main_clock_full',
-		readyPageMainCategory,
-		'Ready page main: clock full readout',
-	)
-	clonePresetToCategory(
-		'readout_message',
-		'ready_main_message_text',
-		readyPageMainCategory,
-		'Ready page main: message readout',
-	)
-	clonePresetToCategory(
-		'readout_display_time',
-		'ready_main_display_time',
-		readyPageMainCategory,
-		'Ready page main: display time',
-	)
-	clonePresetToCategory(
-		'readout_display_time_full',
-		'ready_main_display_time_full',
-		readyPageMainCategory,
-		'Ready page main: display time full',
-	)
-	clonePresetToCategory(
-		'readout_display_time_h',
-		'ready_main_display_time_h',
-		readyPageMainCategory,
-		'Ready page main: display time hours',
-	)
-	clonePresetToCategory(
-		'readout_display_time_m',
-		'ready_main_display_time_m',
-		readyPageMainCategory,
-		'Ready page main: display time minutes',
-	)
-	clonePresetToCategory(
-		'readout_display_time_s',
-		'ready_main_display_time_s',
-		readyPageMainCategory,
-		'Ready page main: display time seconds',
-	)
-
-	clonePresetToCategory('readout_timer_h', 'ready_timer_hours', readyPageTimerCategory, 'Ready page timer: hours')
-	clonePresetToCategory('readout_timer_m', 'ready_timer_minutes', readyPageTimerCategory, 'Ready page timer: minutes')
-	clonePresetToCategory('readout_timer_s', 'ready_timer_seconds', readyPageTimerCategory, 'Ready page timer: seconds')
-	clonePresetToCategory(
-		'readout_additional_full',
-		'ready_timer_additional_full',
-		readyPageTimerCategory,
-		'Ready page timer: additional time',
-	)
-	clonePresetToCategory('timer_plus_60', 'ready_timer_plus_60', readyPageTimerCategory, 'Ready page timer: plus 60')
-	clonePresetToCategory('timer_minus_60', 'ready_timer_minus_60', readyPageTimerCategory, 'Ready page timer: minus 60')
-	clonePresetToCategory(
-		'timer_blink_toggle',
-		'ready_timer_blink',
-		readyPageTimerCategory,
-		'Ready page timer: blink toggle',
-	)
-	clonePresetToCategory(
-		'timer_additional_toggle',
-		'ready_timer_additional_toggle',
-		readyPageTimerCategory,
-		'Ready page timer: additional toggle',
-	)
-
-	clonePresetToCategory('chrono_start', 'ready_chrono_start', readyPageChronoCategory, 'Ready page chrono: start')
-	clonePresetToCategory('chrono_stop', 'ready_chrono_stop', readyPageChronoCategory, 'Ready page chrono: stop')
-	clonePresetToCategory('chrono_reset', 'ready_chrono_reset', readyPageChronoCategory, 'Ready page chrono: reset')
-	clonePresetToCategory('readout_chrono_h', 'ready_chrono_hours', readyPageChronoCategory, 'Ready page chrono: hours')
-	clonePresetToCategory(
-		'readout_chrono_m',
-		'ready_chrono_minutes',
-		readyPageChronoCategory,
-		'Ready page chrono: minutes',
-	)
-	clonePresetToCategory(
-		'readout_chrono_s',
-		'ready_chrono_seconds',
-		readyPageChronoCategory,
-		'Ready page chrono: seconds',
-	)
-	clonePresetToCategory(
-		'chrono_blink_toggle',
-		'ready_chrono_blink',
-		readyPageChronoCategory,
-		'Ready page chrono: blink toggle',
-	)
-	clonePresetToCategory(
-		'chrono_thresholds_on',
-		'ready_chrono_thresholds',
-		readyPageChronoCategory,
-		'Ready page chrono: thresholds',
-	)
-
-	clonePresetToCategory('audio_toggle', 'ready_audio_toggle', readyPageAudioCategory, 'Ready page audio: toggle')
-	clonePresetToCategory('audio_stop', 'ready_audio_stop', readyPageAudioCategory, 'Ready page audio: stop')
-	clonePresetToCategory(
-		'audio_stop_current_on_play',
-		'ready_audio_stop_current_on_play',
-		readyPageAudioCategory,
-		'Ready page audio: stop current on play',
-	)
-	clonePresetToCategory(
-		'audio_rules_enable',
-		'ready_audio_rules_enable',
-		readyPageAudioCategory,
-		'Ready page audio: rules on',
-	)
-	clonePresetToCategory(
-		'audio_volume_80',
-		'ready_audio_volume_80',
-		readyPageAudioCategory,
-		'Ready page audio: volume 80',
-	)
-
-	clonePresetToCategory(
-		'playlist_start',
-		'ready_playlist_start',
-		readyPagePlaylistCategory,
-		'Ready page playlist: start',
-	)
-	clonePresetToCategory('playlist_stop', 'ready_playlist_stop', readyPagePlaylistCategory, 'Ready page playlist: stop')
-	clonePresetToCategory(
-		'playlist_prev',
-		'ready_playlist_prev',
-		readyPagePlaylistCategory,
-		'Ready page playlist: previous',
-	)
-	clonePresetToCategory('playlist_next', 'ready_playlist_next', readyPagePlaylistCategory, 'Ready page playlist: next')
-	clonePresetToCategory(
-		'playlist_intermission_toggle',
-		'ready_playlist_intermission',
-		readyPagePlaylistCategory,
-		'Ready page playlist: intermission',
-	)
-	clonePresetToCategory(
-		'readout_playlist_session',
-		'ready_playlist_session',
-		readyPagePlaylistCategory,
-		'Ready page playlist: current session',
-	)
-	clonePresetToCategory(
-		'readout_playlist_chrono',
-		'ready_playlist_chrono',
-		readyPagePlaylistCategory,
-		'Ready page playlist: chrono',
-	)
-	clonePresetToCategory(
-		'readout_display_time',
-		'ready_playlist_display_time',
-		readyPagePlaylistCategory,
-		'Ready page playlist: display time',
-	)
-	clonePresetToCategory(
-		'readout_display_time_full',
-		'ready_playlist_display_time_full',
-		readyPagePlaylistCategory,
-		'Ready page playlist: display time full',
-	)
-	clonePresetToCategory(
-		'readout_display_time_h',
-		'ready_playlist_display_time_h',
-		readyPagePlaylistCategory,
-		'Ready page playlist: display time hours',
-	)
-	clonePresetToCategory(
-		'readout_display_time_m',
-		'ready_playlist_display_time_m',
-		readyPagePlaylistCategory,
-		'Ready page playlist: display time minutes',
-	)
-	clonePresetToCategory(
-		'readout_display_time_s',
-		'ready_playlist_display_time_s',
-		readyPagePlaylistCategory,
-		'Ready page playlist: display time seconds',
-	)
-
-	clonePresetToCategory('mode_timer', 'ready_show_mode_timer', readyPageShowCategory, 'Ready page show: timer mode')
-	clonePresetToCategory('timer_start', 'ready_show_timer_start', readyPageShowCategory, 'Ready page show: timer start')
-	clonePresetToCategory('timer_pause', 'ready_show_timer_pause', readyPageShowCategory, 'Ready page show: timer pause')
-	clonePresetToCategory('timer_reset', 'ready_show_timer_reset', readyPageShowCategory, 'Ready page show: timer reset')
-	clonePresetToCategory(
-		'message_show',
-		'ready_show_message_show',
-		readyPageShowCategory,
-		'Ready page show: message show',
-	)
-	clonePresetToCategory(
-		'message_set_pause',
-		'ready_show_message_pause',
-		readyPageShowCategory,
-		'Ready page show: message pause',
-	)
-	clonePresetToCategory(
-		'message_alert',
-		'ready_show_message_alert',
-		readyPageShowCategory,
-		'Ready page show: message alert',
-	)
-	clonePresetToCategory(
-		'audio_toggle',
-		'ready_show_audio_toggle',
-		readyPageShowCategory,
-		'Ready page show: audio toggle',
-	)
-	clonePresetToCategory('audio_stop', 'ready_show_audio_stop', readyPageShowCategory, 'Ready page show: audio stop')
-	clonePresetToCategory(
-		'readout_timer_full',
-		'ready_show_timer_full',
-		readyPageShowCategory,
-		'Ready page show: timer full',
-	)
-	clonePresetToCategory(
-		'readout_clock_full',
-		'ready_show_clock_full',
-		readyPageShowCategory,
-		'Ready page show: clock full',
-	)
-	clonePresetToCategory(
-		'readout_message',
-		'ready_show_message_text',
-		readyPageShowCategory,
-		'Ready page show: message text',
-	)
-	clonePresetToCategory(
-		'readout_display_time',
-		'ready_show_display_time',
-		readyPageShowCategory,
-		'Ready page show: display time',
-	)
-	clonePresetToCategory(
-		'readout_display_time_full',
-		'ready_show_display_time_full',
-		readyPageShowCategory,
-		'Ready page show: display time full',
-	)
-	clonePresetToCategory(
-		'readout_display_time_h',
-		'ready_show_display_time_h',
-		readyPageShowCategory,
-		'Ready page show: display time hours',
-	)
-	clonePresetToCategory(
-		'readout_display_time_m',
-		'ready_show_display_time_m',
-		readyPageShowCategory,
-		'Ready page show: display time minutes',
-	)
-	clonePresetToCategory(
-		'readout_display_time_s',
-		'ready_show_display_time_s',
-		readyPageShowCategory,
-		'Ready page show: display time seconds',
-	)
-
-	clonePresetToCategory(
-		'mode_clock',
-		'ready_intermission_mode_clock',
-		readyPageIntermissionCategory,
-		'Ready page intermission: clock mode',
-	)
-	clonePresetToCategory(
-		'mode_logo',
-		'ready_intermission_mode_logo',
-		readyPageIntermissionCategory,
-		'Ready page intermission: logo mode',
-	)
-	clonePresetToCategory(
-		'playlist_intermission_toggle',
-		'ready_intermission_toggle',
-		readyPageIntermissionCategory,
-		'Ready page intermission: toggle',
-	)
-	clonePresetToCategory(
-		'message_set_pause',
-		'ready_intermission_message_pause',
-		readyPageIntermissionCategory,
-		'Ready page intermission: pause message',
-	)
-	clonePresetToCategory(
-		'message_clear',
-		'ready_intermission_message_clear',
-		readyPageIntermissionCategory,
-		'Ready page intermission: clear message',
-	)
-	clonePresetToCategory(
-		'audio_toggle',
-		'ready_intermission_audio_toggle',
-		readyPageIntermissionCategory,
-		'Ready page intermission: audio toggle',
-	)
-	clonePresetToCategory(
-		'audio_stop',
-		'ready_intermission_audio_stop',
-		readyPageIntermissionCategory,
-		'Ready page intermission: audio stop',
-	)
-	clonePresetToCategory(
-		'readout_clock_full',
-		'ready_intermission_clock_full',
-		readyPageIntermissionCategory,
-		'Ready page intermission: clock full',
-	)
-	clonePresetToCategory(
-		'readout_playlist_session',
-		'ready_intermission_session',
-		readyPageIntermissionCategory,
-		'Ready page intermission: session',
-	)
-	clonePresetToCategory(
-		'readout_playlist_chrono',
-		'ready_intermission_chrono',
-		readyPageIntermissionCategory,
-		'Ready page intermission: chrono',
-	)
-	clonePresetToCategory(
-		'readout_display_time',
-		'ready_intermission_display_time',
-		readyPageIntermissionCategory,
-		'Ready page intermission: display time',
-	)
-	clonePresetToCategory(
-		'readout_display_time_full',
-		'ready_intermission_display_time_full',
-		readyPageIntermissionCategory,
-		'Ready page intermission: display time full',
-	)
-	clonePresetToCategory(
-		'readout_display_time_h',
-		'ready_intermission_display_time_h',
-		readyPageIntermissionCategory,
-		'Ready page intermission: display time hours',
-	)
-	clonePresetToCategory(
-		'readout_display_time_m',
-		'ready_intermission_display_time_m',
-		readyPageIntermissionCategory,
-		'Ready page intermission: display time minutes',
-	)
-	clonePresetToCategory(
-		'readout_display_time_s',
-		'ready_intermission_display_time_s',
-		readyPageIntermissionCategory,
-		'Ready page intermission: display time seconds',
-	)
 	clonePresetToCategory('readout_display_time', 'display_display_time', 'Display', 'Display: current time readout')
 	clonePresetToCategory(
 		'readout_display_time_full',
@@ -1472,33 +1425,45 @@ export function UpdatePresets(self: ModuleInstance): void {
 		'Display: current time seconds readout',
 	)
 
-	for (const sound of self.getAvailableAudioSounds().slice(0, 8)) {
-		const safeId = sound.id.replace(/[^a-z0-9_-]/gi, '_').toLowerCase()
-		clonePresetToCategory(
-			`audio_play_${safeId}`,
-			`ready_audio_play_${safeId}`,
-			readyPageAudioCategory,
-			`Ready page audio: play ${sound.label}`,
-		)
-		clonePresetToCategory(
-			`audio_play_${safeId}`,
-			`ready_show_audio_play_${safeId}`,
-			readyPageShowCategory,
-			`Ready page show: play ${sound.label}`,
-		)
-	}
+	clonePresetToCategory(
+		'readout_playlist_session',
+		'playlist_session_readout',
+		playlistCategory,
+		'Playlist: current session readout',
+	)
+	clonePresetToCategory(
+		'readout_playlist_mode',
+		'playlist_mode_readout',
+		playlistCategory,
+		'Playlist: current session mode readout',
+	)
+	clonePresetToCategory(
+		'readout_playlist_next_session',
+		'playlist_next_session_readout',
+		playlistCategory,
+		'Playlist: next session readout',
+	)
+	clonePresetToCategory(
+		'readout_playlist_chrono',
+		'playlist_chrono_readout',
+		playlistCategory,
+		'Playlist: session chrono readout',
+	)
+	clonePresetToCategory(
+		'readout_playlist_intermission',
+		'playlist_intermission_readout',
+		playlistCategory,
+		'Playlist: intermission countdown readout',
+	)
+	clonePresetToCategory(
+		'readout_display_time',
+		'playlist_display_time',
+		playlistCategory,
+		'Playlist: current display time readout',
+	)
 
 	applyFixedTextSizeToCategories(
-		[
-			'Timer',
-			'Chrono',
-			'Audio',
-			'Playlist',
-			readyPageTimerCategory,
-			readyPageChronoCategory,
-			readyPageAudioCategory,
-			readyPagePlaylistCategory,
-		],
+		['Timer', 'Chrono', 'Audio', playlistCategory, screen2Category, layoutCategory, displayCategory, networkCategory],
 		'14',
 	)
 
