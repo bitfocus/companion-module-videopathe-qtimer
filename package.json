@@ -1,6 +1,6 @@
 {
 	"name": "companion-module-videopathe-qtimer",
-	"version": "1.1.1",
+	"version": "1.1.2",
 	"description": "Bitfocus Companion module for QTimer",
 	"main": "dist/main.js",
 	"type": "module",
