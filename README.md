@@ -11,11 +11,14 @@ The module targets the API exposed by the QTimer desktop app on port `2222`. It 
 
 - a **WebSocket** (`ws://<host>:2222/?client=companion-module`) that pushes `state` updates the moment the
   timer changes, so transport feedbacks react without waiting for a poll
-- **HTTP polling** for everything the socket does not carry — `/api/status`, `/api/playlist/state`,
-  `/api/audio/settings`, and (optionally) `/api/ndi/status` + `/api/omt/status`
+- **HTTP polling** for everything the socket does not carry — `/api/status` (which includes the playlist)
+  every tick, and a slower 5 s lane for `/api/audio/settings`, `/api/language` and (optionally)
+  `/api/ndi/status` + `/api/omt/status`
 
-The default poll interval is `1000 ms`. The socket reconnects on its own, and polling keeps the connection
-alive if the socket is unavailable, so the module stays usable either way.
+The default poll interval is `1000 ms`. `/api/status` is the gate: nothing else is requested until it
+answers, an outage is logged once and retried with backoff (up to 10 s), and the WebSocket is only opened
+once HTTP has answered. Polling keeps the connection alive if the socket is unavailable, so the module stays
+usable either way.
 
 It covers:
 
@@ -28,16 +31,19 @@ It covers:
 - display elements: show/hide, per-element colour, progress-bar thresholds, timer colour sync, and a raw
   `displaySettings` JSON escape hatch
 - clock 12h AM/PM or 24h format
+- output background colour (chroma key) and the fade between display modes
+- UI language and preset-message language, with the languages planned for QTimer 2026.10 already listed
 - messages: free text, preset messages, operator-view layout messages, blink, visibility, red alert, and
   speaker acknowledgement
 - audio: master enable, master volume, stop-current-on-play, all rules or a single rule, and sound playback
 - playlist: transport, session selection by index or name, session enable/disable, end-of-session action,
   auto mode, intermission control and duration, defaults, clear, and save
 - NDI / OMT stream monitoring, test patterns, alpha channel, and stop
-- 117 Companion variables covering timer, chrono, clock, message, audio, playlist, layout and stream state
-- 47 feedbacks, including two advanced ones (red alert style, current display time colour & blink)
+- 124 Companion variables covering timer, chrono, clock, message, audio, playlist, layout, language and
+  stream state
+- 52 feedbacks, including two advanced ones (red alert style, current display time colour & blink)
 - ready-made presets grouped by Timer, Chrono, Display, Screen 2, Layouts, Message, Audio, Playlist,
-  Network Streams and Readouts
+  Network Streams, Language and Readouts
 
 ## Requirements
 
@@ -51,13 +57,13 @@ It covers:
 2. Note the machine's IP address, or use `127.0.0.1` if Companion runs on the same machine.
 3. In Companion, add a **Videopathe: QTimer** connection and fill in:
 
-| Field                            | Default     | Description                                                                    |
-| -------------------------------- | ----------- | ------------------------------------------------------------------------------ |
-| **QTimer host**                  | `127.0.0.1` | IP address of the machine running QTimer, e.g. `192.168.1.20`                  |
-| **QTimer port**                  | `2222`      | QTimer HTTP API port                                                           |
-| **Poll interval (ms)**           | `1000`      | Periodic refresh rate, `250`–`10000`. The WebSocket already covers timer state |
-| **API PIN**                      | _blank_     | Only for a remote Companion when QTimer's API is PIN-protected — see below     |
-| **Poll NDI / OMT stream status** | on          | Turn off if the network outputs are unused — saves two requests per tick       |
+| Field                            | Default     | Description                                                                  |
+| -------------------------------- | ----------- | ---------------------------------------------------------------------------- |
+| **QTimer host**                  | `127.0.0.1` | IP address of the machine running QTimer, e.g. `192.168.1.20`                |
+| **QTimer port**                  | `2222`      | QTimer HTTP API port                                                         |
+| **Poll interval (ms)**           | `1000`      | Periodic refresh rate, `250`–`10000`. Backs off to 10 s while QTimer is down |
+| **API PIN**                      | _blank_     | Only for a remote Companion when QTimer's API is PIN-protected — see below   |
+| **Poll NDI / OMT stream status** | on          | Turn off if the network outputs are unused — saves two requests per tick     |
 
 4. Save, and confirm the connection reaches the `ok` status.
 5. Drag presets from the module onto your buttons.
@@ -110,6 +116,8 @@ the cookie on the handshake anyway once it holds one.
 | Display: Set element color                 | element, colour                                     |                                                                                         |
 | Display: Sync timer color with progress    | toggle / on / off                                   |                                                                                         |
 | Display: Set progress bar thresholds       | threshold values                                    |                                                                                         |
+| Display: Set background color              | colour                                              | Global output background, i.e. the chroma key colour                                    |
+| Display: Set fade between modes            | toggle / on / off / keep, optional duration (ms)    | Reading the fade state works on 2026.9; setting it needs QTimer 2026.10 (`404` before)  |
 | Display: Set raw display settings (JSON)   | JSON                                                | Escape hatch for settings with no dedicated action                                      |
 | Clock: Set 12h AM/PM format                | toggle / on / off                                   |                                                                                         |
 | Message: Set message                       | text, colour, blink                                 |                                                                                         |
@@ -142,6 +150,8 @@ the cookie on the handshake anyway once it holds one.
 | NDI / OMT: Test pattern                    | toggle / on / off                                   |                                                                                         |
 | NDI: Set alpha channel                     | toggle / on / off                                   |                                                                                         |
 | NDI / OMT: Stop stream                     | —                                                   |                                                                                         |
+| Language: Set UI language                  | fr / en / es / it / de / pt / nl                    | 2026.9 accepts `fr` and `en`; the others are planned for 2026.10 (`400` before)         |
+| Language: Set preset message language      | auto / fr / en / es / it / de / pt / nl             | `auto` follows the UI language                                                          |
 | System: Clear trigger logs                 | —                                                   |                                                                                         |
 
 Starting a real NDI/OMT program stream is deliberately _not_ exposed. QTimer sets up its capture pipeline
@@ -190,6 +200,10 @@ to be enable-only now offer a `Toggle` choice resolved against the value QTimer 
 | Active layout family matches                   | boolean  |                                                                                                                    |
 | Display element is visible                     | boolean  | Per element                                                                                                        |
 | Clock uses 12h AM/PM format                    | boolean  |                                                                                                                    |
+| Output background color matches                | boolean  | e.g. lit while the output is keyed on green                                                                        |
+| Fade between modes is enabled / in progress    | boolean  | Two feedbacks                                                                                                      |
+| UI language matches                            | boolean  | fr / en / es / it / de / pt / nl                                                                                   |
+| Preset message language matches                | boolean  | Compares the setting (`auto` or a code) or, with the _resolved_ option, the language actually in use               |
 | NDI / OMT stream is running                    | boolean  |                                                                                                                    |
 | NDI / OMT test pattern is active               | boolean  |                                                                                                                    |
 
@@ -200,7 +214,11 @@ All variables are prefixed with `$(videopathe-qtimer:…)`.
 **Connection** — `connection_status`, `websocket_connected`, `server_url`
 
 **Display** — `display_mode`, `display_time_source`, `display_time_formatted`, `display_time_full_formatted`,
-`display_time_hours`, `display_time_minutes`, `display_time_seconds`, `layout_mode`, `clock_12h_format`
+`display_time_hours`, `display_time_minutes`, `display_time_seconds`, `layout_mode`, `clock_12h_format`,
+`background_color`, `mode_fade_enabled`, `mode_fade_duration_ms`, `mode_fade_active`
+
+**Language** — `language`, `message_language` (`auto` or a code), `message_language_resolved` (the language
+preset messages actually use)
 
 **Timer** — `timer_running`, `timer_full_formatted`, `timer_blink_enabled`, `timer_blink_active`,
 `timer_hours`, `timer_minutes`, `timer_seconds`, `timer_preset_count`
@@ -252,7 +270,8 @@ turns the button dark red when QTimer is unreachable.
 - **Chrono** — start, stop, reset, blink toggle, blink at 60 s, colour thresholds toggle, threshold 1 at
   5 min, threshold 2 at 10 min
 - **Display** — one button per display mode, show/hide for the six main elements, clock 12/24h, timer colour
-  sync, plus the current display time readouts
+  sync, background black / chroma green / chroma blue, mode fade toggle, plus the current display time
+  readouts
 - **Screen 2** — mirror toggle, mirror on, and one button per mode for the second screen alone and for both
   screens at once
 - **Layouts** — the first four timer layout presets for each output (main, second screen, network)
@@ -262,7 +281,9 @@ turns the button dark red when QTimer is unreachable.
 - **Playlist** — start, stop, previous, next, intermission toggle, plus the playlist readouts: current
   session, session mode, next session, session chrono, intermission countdown, current display time
 - **Network Streams** — NDI and OMT test pattern toggles and stop buttons
-- **Readouts** — the full readout set for timer, additional time, clock, chrono, display time, second screen
+- **Language** — one button per UI language and per preset-message language (plus `auto`), lit when active
+- **Readouts** — the full readout set for timer, additional time, clock, chrono, display time, second screen,
+  language and background colour
   mode, per-output layouts, NDI / OMT status, playlist sessions and message text
 
 The `Playlist` category is the one to reach for when building an intermission page: it puts the transport,
@@ -291,14 +312,19 @@ buttons, `SCR2 MIRROR`, a layout preset, `MESSAGE SHOW`, `AUDIO`, and the NDI / 
 ## API reference
 
 - WebSocket `ws://<host>:2222/?client=companion-module` — pushed `state` updates
-- `GET /api/status` — aggregated state snapshot (timer, chrono, display, message, screens, layouts)
-- `GET /api/playlist/state` — sessions, current/next session, intermission
-- `GET /api/audio/settings` — master state, volume, rules
-- `GET /api/ndi/status`, `GET /api/omt/status` — stream state (optional, see the config checkbox)
+- `GET /api/status` — aggregated state snapshot (timer, chrono, display, message, screens, layouts, playlist,
+  mode fade, background)
+- `GET /api/playlist/state` — sessions, current/next session, intermission (only used when the status
+  snapshot has no `playlist`, i.e. a QTimer older than 2026.8)
+- `GET /api/audio/settings` — master state, volume, rules, sound list (slow lane, every 5 s)
+- `GET /api/language` — UI language and preset-message language (slow lane)
+- `GET /api/ndi/status`, `GET /api/omt/status` — stream state (slow lane, optional, see the config checkbox)
 - `POST /api/timer/*` — start, pause, reset, set, adjust, presets, blink options, additional time
 - `POST /api/chrono/*` — transport and options, including colour thresholds
 - `POST /api/mode`, `/api/screen2/mode`, `/api/screen2/follow`, `/api/layout-preset`
-- `POST /api/display/settings`, `/api/clock/toggle-12h-format`
+- `POST /api/display/settings` (elements, colours, `background.color`), `/api/clock/toggle-12h-format`
+- `POST /api/mode-fade` — fade between modes (QTimer 2026.10+)
+- `POST /api/language`, `/api/message-language`
 - `POST /api/message/*`, `/api/layout-message/set`, `/api/speaker/ack`
 - `POST /api/audio/*` — play, stop, enabled, volume, rules
 - `POST /api/playlist/*` — transport, session selection, options, save, clear
@@ -313,12 +339,42 @@ buttons, `SCR2 MIRROR`, a layout preset, `MESSAGE SHOW`, `AUDIO`, and the NDI / 
   with the same 4–8 digit PIN, or turn that option off in QTimer if the API is meant to stay open.
 - **The connection goes `ok` but nothing updates** — the WebSocket may be blocked while HTTP still passes.
   Check the module log at debug level; polling alone still refreshes state at the poll interval.
-- **Two requests per tick you don't need** — turn off _Poll NDI / OMT stream status_ if the network outputs
+- **Two requests every 5 s you don't need** — turn off _Poll NDI / OMT stream status_ if the network outputs
   are unused.
+- **Only one error in the log while QTimer is down** — that is intended. The module logs an outage once, backs
+  off to a 10 s retry, and logs `answers again` when QTimer is back; the connection status shows the reason
+  meanwhile.
+- **`Display: Set fade between modes` fails with `404`** — that action needs QTimer 2026.10 or later. Reading
+  the fade state (variables and feedbacks) works from 2026.9.
+- **`Language: Set UI language` fails with `400`** — QTimer 2026.9 only accepts `fr` and `en`; the other
+  languages arrive with 2026.10.
 - **A preset, sound, rule or session is missing from a dropdown** — the list comes from QTimer and refreshes
   while connected. Add it in QTimer, or type the value manually (every dropdown accepts a custom value).
 
 ## Changelog
+
+### 1.1.1
+
+- Polling reworked after the Companion review: `/api/status` is requested first and alone, and nothing else
+  is asked of a host that does not answer it. An outage is logged **once** (with the underlying cause, e.g.
+  `ECONNREFUSED`), the poll backs off (1 s, 2 s, 4 s, 8 s, then 10 s), and a single `answers again` line is
+  logged on recovery. The WebSocket is only opened once HTTP has answered and no longer logs an error on
+  every failed reconnect, so a stopped QTimer or a bad host/port produces one log line instead of a burst.
+- The playlist now comes from the `/api/status` snapshot (one request per tick less); `/api/playlist/state`
+  is only used with a QTimer older than 2026.8.
+- The sound list, language and NDI / OMT status moved to a 5 s slow lane instead of every tick. Secondary
+  endpoint failures are logged once, at debug level, and never affect the connection status.
+- Output background colour (chroma key): `Display: Set background color` action, `background_color`
+  variable, `Output background color matches` feedback, and black / green / blue presets.
+- Fade between display modes (QTimer 2026.9): `mode_fade_enabled`, `mode_fade_duration_ms` and
+  `mode_fade_active` variables, two feedbacks, and a `Display: Set fade between modes` action (setting it over
+  the API needs QTimer 2026.10).
+- Language: `Language: Set UI language` and `Language: Set preset message language` actions, `language`,
+  `message_language` and `message_language_resolved` variables, matching feedbacks, live updates over the
+  WebSocket, and a `Language` preset category. `es`, `it`, `de`, `pt` and `nl` are listed ahead of QTimer
+  2026.10 so buttons built now keep working then.
+- PIN authentication failures are no longer logged on every attempt; the reason is carried in the single
+  outage line instead.
 
 ### 1.1.0
 

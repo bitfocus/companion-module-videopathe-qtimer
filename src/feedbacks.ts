@@ -4,7 +4,9 @@ import {
 	DISPLAY_ELEMENT_CHOICES,
 	DISPLAY_MODE_CHOICES,
 	END_ACTION_CHOICES,
+	LANGUAGE_CHOICES,
 	LAYOUT_MODE_CHOICES,
+	MESSAGE_LANGUAGE_CHOICES,
 	OUTPUT_ROLE_CHOICES,
 	SESSION_MATCH_CHOICES,
 } from './choices.js'
@@ -22,9 +24,11 @@ import {
 	isChronoColorThresholdsEnabled,
 	isClock12HourFormat,
 	isDisplayElementVisible,
+	isModeFadeActive,
 	isScreen2FollowingMain,
 	isTimerFinished,
 	normalizeHexColor,
+	resolveMessageLanguage,
 	safeNumber,
 	type OutputRole,
 } from './state.js'
@@ -767,6 +771,98 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 			},
 			options: [],
 			callback: () => self.runtimeState.omt?.testPatternActive === true,
+		},
+		background_color_matches: {
+			name: 'Output background color matches',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(0, 255, 0),
+				color: combineRgb(0, 0, 0),
+			},
+			options: [
+				{
+					id: 'color',
+					type: 'colorpicker',
+					label: 'Background color',
+					default: 0x00ff00,
+					tooltip: 'Lights up when the output background is this colour, e.g. the chroma key green.',
+				},
+			],
+			callback: (feedback) => {
+				const actual = normalizeHexColor(self.runtimeState.qtimer?.displaySettings?.background?.color)
+				const expected = normalizeHexColor(`#${Number(feedback.options.color).toString(16).padStart(6, '0')}`)
+				return !!actual && actual === expected
+			},
+		},
+		mode_fade_enabled: {
+			name: 'Fade between modes is enabled',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(124, 58, 237),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [],
+			callback: () => self.runtimeState.qtimer?.modeFade?.enabled === true,
+		},
+		mode_fade_active: {
+			name: 'Fade between modes is in progress',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(234, 179, 8),
+				color: combineRgb(0, 0, 0),
+			},
+			options: [],
+			callback: () => isModeFadeActive(self.runtimeState.qtimer),
+		},
+		language_matches: {
+			name: 'UI language matches',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(59, 130, 246),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [
+				{
+					id: 'language',
+					type: 'dropdown',
+					label: 'Language',
+					default: 'fr',
+					choices: [...LANGUAGE_CHOICES],
+				},
+			],
+			callback: (feedback) => !!self.runtimeState.language && self.runtimeState.language === feedback.options.language,
+		},
+		message_language_matches: {
+			name: 'Preset message language matches',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: combineRgb(59, 130, 246),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [
+				{
+					id: 'messageLanguage',
+					type: 'dropdown',
+					label: 'Message language',
+					default: 'auto',
+					choices: [...MESSAGE_LANGUAGE_CHOICES],
+				},
+				{
+					id: 'resolved',
+					type: 'checkbox',
+					label: 'Compare the language in use (auto resolved to the UI language)',
+					default: false,
+				},
+			],
+			callback: (feedback) => {
+				const setting = self.runtimeState.messageLanguage ?? ''
+				if (feedback.options.resolved !== true) {
+					return !!setting && setting === feedback.options.messageLanguage
+				}
+
+				const inUse = resolveMessageLanguage(self.runtimeState.language ?? '', setting)
+				return !!inUse && inUse === feedback.options.messageLanguage
+			},
 		},
 		progress_percent_compare: {
 			name: 'Progress percent comparison',

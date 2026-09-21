@@ -5,8 +5,10 @@ import {
 	DISPLAY_ELEMENT_CHOICES,
 	DISPLAY_MODE_CHOICES,
 	END_ACTION_CHOICES,
+	LANGUAGE_CHOICES,
 	LAYOUT_MODE_CHOICES,
 	LAYOUT_TARGET_CHOICES,
+	MESSAGE_LANGUAGE_CHOICES,
 	MODE_CHOICES_SECONDS_PERCENT,
 	OPERATOR_VIEW_CHOICES,
 	PLAYLIST_AUTO_MODE_CHOICES,
@@ -17,6 +19,8 @@ import {
 	isChronoColorThresholdsEnabled,
 	isDisplayElementVisible,
 	isScreen2FollowingMain,
+	normalizeLanguageCode,
+	normalizeMessageLanguageCode,
 } from './state.js'
 import type { ModuleInstance } from './main.js'
 
@@ -535,6 +539,67 @@ export function UpdateActions(self: ModuleInstance): void {
 						},
 					},
 				}),
+		},
+		display_set_background_color: {
+			name: 'Display: Set background color',
+			options: [
+				{
+					id: 'color',
+					type: 'colorpicker',
+					label: 'Background color',
+					default: 0x000000,
+					tooltip: 'Global output background. Pick a saturated green or blue to key the output (chroma key).',
+				},
+			],
+			callback: async (event) =>
+				self.postCommand('/api/display/settings', {
+					displaySettings: { background: { color: toHexColor(event.options.color) } },
+				}),
+		},
+		display_set_mode_fade: {
+			name: 'Display: Set fade between modes',
+			options: [
+				{
+					id: 'state',
+					type: 'dropdown',
+					label: 'Fade',
+					default: 'toggle',
+					choices: [...TOGGLE_CHOICES, { id: 'keep', label: 'Leave as is (duration only)' }],
+				},
+				{
+					id: 'setDuration',
+					type: 'checkbox',
+					label: 'Also set the duration',
+					default: false,
+				},
+				{
+					id: 'durationMs',
+					type: 'number',
+					label: 'Fade duration (ms)',
+					default: 1000,
+					min: 200,
+					max: 4000,
+					isVisible: (options) => options.setDuration === true,
+				},
+			],
+			callback: async (event) => {
+				const payload: { enabled?: boolean; durationMs?: number } = {}
+				if (event.options.state !== 'keep') {
+					payload.enabled = resolveToggleState(
+						event.options.state,
+						self.runtimeState.qtimer?.modeFade?.enabled === true,
+					)
+				}
+				if (event.options.setDuration === true) {
+					payload.durationMs = Math.max(200, Math.min(4000, Math.round(Number(event.options.durationMs))))
+				}
+				if (payload.enabled === undefined && payload.durationMs === undefined) {
+					return
+				}
+
+				// Requires QTimer 2026.10 or later; older builds answer 404 and the module reports it.
+				await self.postCommand('/api/mode-fade', payload)
+			},
 		},
 		display_set_settings_raw: {
 			name: 'Display: Set raw display settings (JSON)',
@@ -1286,6 +1351,53 @@ export function UpdateActions(self: ModuleInstance): void {
 				await self.postCommand('/api/omt/test-stream', {
 					showAlphaZone: event.options.showAlphaZone === true,
 				})
+			},
+		},
+		language_set: {
+			name: 'Language: Set UI language',
+			options: [
+				{
+					id: 'language',
+					type: 'dropdown',
+					label: 'Language',
+					default: 'fr',
+					choices: [...LANGUAGE_CHOICES],
+					allowCustom: true,
+					tooltip:
+						'QTimer 2026.9 accepts fr and en. es, it, de, pt and nl are planned for 2026.10; an older QTimer rejects them.',
+				},
+			],
+			callback: async (event) => {
+				const language = normalizeLanguageCode(await resolveText(self, event.options.language))
+				if (!language) {
+					self.log('warn', `language_set: unsupported language "${String(event.options.language)}"`)
+					return
+				}
+
+				await self.postCommand('/api/language', { language })
+			},
+		},
+		message_language_set: {
+			name: 'Language: Set preset message language',
+			options: [
+				{
+					id: 'messageLanguage',
+					type: 'dropdown',
+					label: 'Message language',
+					default: 'auto',
+					choices: [...MESSAGE_LANGUAGE_CHOICES],
+					allowCustom: true,
+					tooltip: 'Language of the built-in preset messages. Auto follows the UI language.',
+				},
+			],
+			callback: async (event) => {
+				const messageLanguage = normalizeMessageLanguageCode(await resolveText(self, event.options.messageLanguage))
+				if (!messageLanguage) {
+					self.log('warn', `message_language_set: unsupported language "${String(event.options.messageLanguage)}"`)
+					return
+				}
+
+				await self.postCommand('/api/message-language', { messageLanguage })
 			},
 		},
 		clear_trigger_logs: {

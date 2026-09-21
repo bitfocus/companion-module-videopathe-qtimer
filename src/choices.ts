@@ -103,3 +103,28 @@ export const OPERATOR_VIEW_CHOICES = [
 	{ id: 'showcaller', label: 'Show caller' },
 	{ id: 'mobile', label: 'Mobile' },
 ] as const
+
+/**
+ * UI languages. QTimer 2026.9 accepts `fr` and `en`; the rest are the languages planned
+ * for 2026.10 and are exposed now so buttons built today keep working on that release.
+ */
+export const LANGUAGE_CHOICES = [
+	{ id: 'fr', label: 'Français (FR)' },
+	{ id: 'en', label: 'English (EN)' },
+	{ id: 'es', label: 'Español (ES)' },
+	{ id: 'it', label: 'Italiano (IT)' },
+	{ id: 'de', label: 'Deutsch (DE)' },
+	{ id: 'pt', label: 'Português (PT)' },
+	{ id: 'nl', label: 'Nederlands (NL)' },
+] as const
+
+export const MESSAGE_LANGUAGE_CHOICES = [
+	{ id: 'auto', label: 'Auto (follow the UI language)' },
+	...LANGUAGE_CHOICES,
+] as const
+
+export const BACKGROUND_COLOR_PRESETS = [
+	{ id: 'black', label: 'Black', color: 0x000000 },
+	{ id: 'chroma-green', label: 'Chroma key green', color: 0x00ff00 },
+	{ id: 'chroma-blue', label: 'Chroma key blue', color: 0x0000ff },
+] as const

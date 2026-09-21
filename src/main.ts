@@ -23,8 +23,13 @@ import {
 	isScreen2FollowingMain,
 	parseClockParts,
 	parseTimerPresetDuration,
+	isModeFadeActive,
+	normalizeLanguageCode,
+	normalizeMessageLanguageCode,
+	resolveMessageLanguage,
 	type QTimerAudioSettingsResponse,
 	type QTimerAudioSound,
+	type QTimerLanguageResponse,
 	type QTimerNdiStatus,
 	type QTimerOmtStatus,
 	type PlaylistSnapshot,
@@ -47,7 +52,23 @@ interface RuntimeState {
 	audioSounds?: QTimerAudioSound[]
 	ndi?: QTimerNdiStatus
 	omt?: QTimerOmtStatus
+	/** UI language reported by QTimer (`fr`, `en`, ...). */
+	language?: string
+	/** Language used for preset messages: a language code or `auto` (follows the UI language). */
+	messageLanguage?: string
 }
+
+/** Longest pause between two `/api/status` attempts while QTimer does not answer. */
+const MAX_POLL_BACKOFF_MS = 10_000
+/**
+ * Everything that is not in the `/api/status` snapshot (sound list, NDI/OMT status, language)
+ * changes rarely, so it is refreshed on this slower cadence instead of on every tick.
+ */
+const SLOW_POLL_INTERVAL_MS = 5_000
+/** Commands whose effect is only visible through a slow-lane endpoint. */
+const SLOW_LANE_COMMAND_PREFIXES = ['/api/audio/', '/api/ndi/', '/api/omt/', '/api/language', '/api/message-language']
+const WEBSOCKET_RECONNECT_BASE_MS = 2_000
+const WEBSOCKET_RECONNECT_MAX_MS = 10_000
 
 export interface DynamicChoice {
 	id: string
@@ -64,15 +85,28 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 	}
 
 	private pollTimer: NodeJS.Timeout | undefined
+	/** Bumped whenever polling is (re)started so a stale loop stops rescheduling itself. */
+	private pollGeneration = 0
 	private pollInFlight = false
+	private consecutivePollFailures = 0
+	/** Last outage message written to the log, so an outage produces one line instead of one per tick. */
+	private lastLoggedPollError: string | null = null
+	/** Timestamp before which the slow lane (audio, NDI, OMT, language) is not refreshed again. */
+	private slowLaneDueAt = 0
+	/** Optional endpoints whose failure has already been logged during the current connection. */
+	private failedOptionalEndpoints = new Set<string>()
 	private fetchAbortController = new AbortController()
 	private websocket: WebSocket | undefined
 	private websocketReconnectTimer: NodeJS.Timeout | undefined
 	private websocketConnected = false
+	private websocketConnectGeneration = 0
+	private websocketReconnectAttempts = 0
+	private websocketUnavailableWarned = false
 	private dynamicDefinitionSignature = ''
 	private authCookie = ''
 	private authInFlight: Promise<boolean> | undefined
 	private authFailed = false
+	private lastAuthError = ''
 
 	constructor(internal: unknown) {
 		super(internal)
@@ -102,15 +136,16 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		this.updateVariableDefinitions()
 		this.updateVariablesFromState()
 
-		this.startPolling(true)
-		this.connectWebSocket()
+		// The WebSocket is opened by the first successful poll, so a QTimer that is not
+		// running costs one HTTP attempt per backoff step and nothing else.
+		this.startPolling()
 	}
 
 	async destroy(): Promise<void> {
 		this.fetchAbortController.abort()
 		this.pollInFlight = false
 		this.stopPolling()
-		this.disconnectWebSocket(false)
+		this.disconnectWebSocket()
 		this.log('debug', 'destroy')
 	}
 
@@ -126,11 +161,11 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			serverUrl: '',
 			lastUpdated: null,
 		}
+		this.disconnectWebSocket()
 		this.updateVariablesFromState()
 		this.checkFeedbacks()
 		this.refreshDynamicDefinitions()
-		this.startPolling(true)
-		this.connectWebSocket()
+		this.startPolling()
 	}
 
 	getConfigFields(): SomeCompanionConfigField[] {
@@ -219,6 +254,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		this.authCookie = ''
 		this.authInFlight = undefined
 		this.authFailed = false
+		this.lastAuthError = ''
 	}
 
 	/** Adds the QTimer session cookie to a request once the PIN has been exchanged for one. */
@@ -263,7 +299,8 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			} catch (error) {
 				this.authCookie = ''
 				this.authFailed = true
-				this.log('error', `PIN authentication failed: ${this.formatError(error)}`)
+				// Not logged here: the poll that triggered this reports the outage once, with this reason.
+				this.lastAuthError = this.formatError(error)
 				return false
 			} finally {
 				this.authInFlight = undefined
@@ -294,7 +331,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			}
 
 			if (!(await this.authenticate())) {
-				throw new Error('QTimer rejected the configured API PIN')
+				throw new Error(`QTimer rejected the configured API PIN${this.lastAuthError ? ` (${this.lastAuthError})` : ''}`)
 			}
 
 			return await fetchJson<T>(url, this.withAuth(init))
@@ -302,126 +339,24 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 	}
 
 	private stopPolling(): void {
+		this.pollGeneration++
 		if (this.pollTimer) {
-			clearInterval(this.pollTimer)
+			clearTimeout(this.pollTimer)
 			this.pollTimer = undefined
 		}
 	}
 
-	private disconnectWebSocket(scheduleReconnect: boolean): void {
-		if (this.websocketReconnectTimer) {
-			clearTimeout(this.websocketReconnectTimer)
-			this.websocketReconnectTimer = undefined
-		}
-
-		if (this.websocket) {
-			this.websocket.removeAllListeners()
-			this.websocket.terminate()
-			this.websocket = undefined
-		}
-
-		this.websocketConnected = false
-		this.updateVariablesFromState()
-		this.checkFeedbacks()
-
-		if (scheduleReconnect && this.hasValidConfig()) {
-			this.updateStatus(InstanceStatus.Connecting)
-			this.websocketReconnectTimer = setTimeout(() => {
-				this.websocketReconnectTimer = undefined
-				this.connectWebSocket()
-			}, 2000)
-		}
-	}
-
-	private connectWebSocket(): void {
-		this.disconnectWebSocket(false)
-
-		if (!this.hasValidConfig()) {
-			return
-		}
-
-		const wsUrl = `ws://${this.config.host}:${safeNumber(this.config.port, 2222)}/?client=companion-module`
-		// QTimer's PIN middleware is Express-only and never sees the upgrade request, so the socket
-		// stays reachable without a PIN. The cookie is sent anyway when we hold one, so the module
-		// keeps working if QTimer ever starts guarding the upgrade too.
-		const websocket = new WebSocket(wsUrl, {
-			handshakeTimeout: 10000,
-			headers: this.authCookie ? { cookie: `${AUTH_COOKIE_NAME}=${this.authCookie}` } : undefined,
-		})
-		this.websocket = websocket
-
-		websocket.on('open', () => {
-			if (this.websocket !== websocket) {
-				return
-			}
-
-			this.websocketConnected = true
-			this.log('debug', `WebSocket connected: ${wsUrl}`)
-			this.updateVariablesFromState()
-			void this.refreshAllState()
-		})
-
-		websocket.on('message', (data) => {
-			if (this.websocket !== websocket) {
-				return
-			}
-
-			this.handleWebSocketMessage(this.decodeWebSocketMessage(data))
-		})
-
-		websocket.on('close', () => {
-			if (this.websocket !== websocket) {
-				return
-			}
-
-			this.log('debug', 'WebSocket closed, scheduling reconnect')
-			this.disconnectWebSocket(true)
-		})
-
-		websocket.on('error', (error) => {
-			if (this.websocket !== websocket) {
-				return
-			}
-
-			const message = this.formatError(error)
-			this.log('error', `WebSocket error: ${message}`)
-			this.updateStatus(InstanceStatus.ConnectionFailure, message)
-		})
-	}
-
-	private handleWebSocketMessage(message: string): void {
-		try {
-			const payload = JSON.parse(message) as { type?: string; data?: unknown }
-
-			if (
-				payload.type !== 'state' ||
-				typeof payload.data !== 'object' ||
-				payload.data === null ||
-				Array.isArray(payload.data)
-			) {
-				return
-			}
-
-			this.runtimeState = {
-				...this.runtimeState,
-				connected: true,
-				lastError: null,
-				serverUrl: this.runtimeState.serverUrl || this.getBaseUrl(),
-				lastUpdated: new Date().toISOString(),
-				qtimer: payload.data,
-			}
-
-			this.updateStatus(InstanceStatus.Ok)
-			this.updateVariablesFromState()
-			this.checkFeedbacks()
-			this.refreshDynamicDefinitions()
-		} catch (error) {
-			this.log('debug', `WebSocket message parse failed: ${this.formatError(error)}`)
-		}
-	}
-
-	private startPolling(runImmediately: boolean): void {
+	/**
+	 * Polling is a self-rescheduling timeout rather than an interval: the delay after a
+	 * failed tick grows (1 s, 2 s, 4 s, 8 s, then 10 s) so an absent QTimer is probed a few
+	 * times a minute, and drops back to the configured interval as soon as it answers.
+	 */
+	private startPolling(): void {
 		this.stopPolling()
+		this.consecutivePollFailures = 0
+		this.lastLoggedPollError = null
+		this.slowLaneDueAt = 0
+		this.failedOptionalEndpoints.clear()
 
 		if (!this.hasValidConfig()) {
 			this.updateStatus(InstanceStatus.BadConfig)
@@ -436,14 +371,236 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		}
 
 		this.updateStatus(InstanceStatus.Connecting)
+		void this.runPollLoop(this.pollGeneration)
+	}
 
-		const interval = Math.max(250, safeNumber(this.config.pollInterval, 1000))
-		this.pollTimer = setInterval(() => {
-			void this.refreshAllState()
-		}, interval)
+	private async runPollLoop(generation: number): Promise<void> {
+		if (generation !== this.pollGeneration) {
+			return
+		}
 
-		if (runImmediately) {
-			void this.refreshAllState()
+		await this.refreshAllState()
+
+		if (generation !== this.pollGeneration) {
+			return
+		}
+
+		this.pollTimer = setTimeout(() => {
+			this.pollTimer = undefined
+			void this.runPollLoop(generation)
+		}, this.nextPollDelay())
+	}
+
+	private get pollInterval(): number {
+		return Math.max(250, safeNumber(this.config.pollInterval, 1000))
+	}
+
+	private nextPollDelay(): number {
+		if (this.consecutivePollFailures === 0) {
+			return this.pollInterval
+		}
+
+		const exponent = Math.min(this.consecutivePollFailures - 1, 5)
+		return Math.min(MAX_POLL_BACKOFF_MS, Math.max(this.pollInterval, 1000 * 2 ** exponent))
+	}
+
+	/** Tears the socket down without scheduling anything; reconnection is decided by the callers. */
+	private disconnectWebSocket(): void {
+		this.websocketConnectGeneration++
+		if (this.websocketReconnectTimer) {
+			clearTimeout(this.websocketReconnectTimer)
+			this.websocketReconnectTimer = undefined
+		}
+
+		if (this.websocket) {
+			this.websocket.removeAllListeners()
+			this.websocket.terminate()
+			this.websocket = undefined
+		}
+
+		if (this.websocketConnected) {
+			this.websocketConnected = false
+			this.updateVariablesFromState()
+			this.checkFeedbacks()
+		}
+	}
+
+	/** Opens the socket if nothing is open or pending. Only called once HTTP has answered. */
+	private ensureWebSocket(): void {
+		if (this.websocket || this.websocketReconnectTimer) {
+			return
+		}
+
+		void this.connectWebSocket()
+	}
+
+	/**
+	 * Called when the socket closes. While the HTTP poll says QTimer is reachable the socket is
+	 * retried with its own backoff; otherwise nothing is scheduled, and the next successful poll
+	 * reopens it. That keeps a stopped QTimer from producing a second stream of errors.
+	 */
+	private scheduleWebSocketReconnect(): void {
+		this.disconnectWebSocket()
+
+		if (!this.runtimeState.connected || !this.hasValidConfig()) {
+			return
+		}
+
+		this.websocketReconnectAttempts++
+		const exponent = Math.min(this.websocketReconnectAttempts - 1, 3)
+		const delay = Math.min(WEBSOCKET_RECONNECT_MAX_MS, WEBSOCKET_RECONNECT_BASE_MS * 2 ** exponent)
+
+		if (this.websocketReconnectAttempts >= 3 && !this.websocketUnavailableWarned) {
+			this.websocketUnavailableWarned = true
+			this.log(
+				'warn',
+				`WebSocket to QTimer keeps failing while HTTP works; state is refreshed by polling only (retrying every ${Math.round(delay / 1000)} s)`,
+			)
+		}
+
+		this.websocketReconnectTimer = setTimeout(() => {
+			this.websocketReconnectTimer = undefined
+			void this.connectWebSocket()
+		}, delay)
+	}
+
+	private async connectWebSocket(): Promise<void> {
+		this.disconnectWebSocket()
+		const connectGeneration = this.websocketConnectGeneration
+
+		if (!this.hasValidConfig()) {
+			return
+		}
+
+		const expectedBaseUrl = this.getBaseUrl()
+		const expectedPin = this.apiPin
+		if (expectedPin && !this.authCookie) {
+			// Authenticate before the WebSocket handshake. Without this, QTimer closes
+			// protected sockets with code 4401 while the first REST poll is still
+			// exchanging the PIN, causing a reconnect/status loop in Companion.
+			await this.authenticate()
+			if (
+				connectGeneration !== this.websocketConnectGeneration ||
+				expectedBaseUrl !== this.getBaseUrl() ||
+				expectedPin !== this.apiPin
+			) {
+				return
+			}
+		}
+
+		const wsUrl = `ws://${this.config.host}:${safeNumber(this.config.port, 2222)}/?client=companion-module`
+		// QTimer validates the session cookie on protected WebSocket connections.
+		const websocket = new WebSocket(wsUrl, {
+			handshakeTimeout: 10000,
+			headers: this.authCookie ? { cookie: `${AUTH_COOKIE_NAME}=${this.authCookie}` } : undefined,
+		})
+		this.websocket = websocket
+
+		websocket.on('open', () => {
+			if (this.websocket !== websocket) {
+				return
+			}
+
+			this.websocketConnected = true
+			this.websocketReconnectAttempts = 0
+			if (this.websocketUnavailableWarned) {
+				this.websocketUnavailableWarned = false
+				this.log('info', 'WebSocket to QTimer is back')
+			}
+			this.log('debug', `WebSocket connected: ${wsUrl}`)
+			this.updateVariablesFromState()
+			this.checkFeedbacks()
+		})
+
+		websocket.on('message', (data) => {
+			if (this.websocket !== websocket) {
+				return
+			}
+
+			this.handleWebSocketMessage(this.decodeWebSocketMessage(data))
+		})
+
+		websocket.on('close', (code, reason) => {
+			if (this.websocket !== websocket) {
+				return
+			}
+
+			if (code === 4401) {
+				this.authCookie = ''
+				this.authFailed = true
+				this.log('warn', `WebSocket authentication rejected${reason.length ? `: ${reason.toString()}` : ''}`)
+			}
+			this.log('debug', `WebSocket closed (${code})`)
+			this.scheduleWebSocketReconnect()
+		})
+
+		websocket.on('error', (error) => {
+			if (this.websocket !== websocket) {
+				return
+			}
+
+			// A 'close' always follows and drives the reconnect; the HTTP poll owns the
+			// connection status, so a socket error alone is not reported as a failure.
+			this.log('debug', `WebSocket error: ${this.formatError(error)}`)
+		})
+	}
+
+	private handleWebSocketMessage(message: string): void {
+		try {
+			const payload = JSON.parse(message) as {
+				type?: string
+				data?: unknown
+				language?: unknown
+				messageLanguage?: unknown
+			}
+
+			if (payload.type === 'language-changed') {
+				const language = normalizeLanguageCode(payload.language)
+				if (language) {
+					this.runtimeState = { ...this.runtimeState, language }
+					this.updateVariablesFromState()
+					this.checkFeedbacks()
+				}
+				return
+			}
+
+			if (payload.type === 'message-language-changed') {
+				const messageLanguage = normalizeMessageLanguageCode(payload.messageLanguage)
+				if (messageLanguage) {
+					this.runtimeState = { ...this.runtimeState, messageLanguage }
+					this.updateVariablesFromState()
+					this.checkFeedbacks()
+				}
+				return
+			}
+
+			if (
+				payload.type !== 'state' ||
+				typeof payload.data !== 'object' ||
+				payload.data === null ||
+				Array.isArray(payload.data)
+			) {
+				return
+			}
+
+			const qtimer = payload.data as QTimerStateSnapshot
+
+			this.runtimeState = {
+				...this.runtimeState,
+				connected: true,
+				lastError: null,
+				serverUrl: this.runtimeState.serverUrl || this.getBaseUrl(),
+				lastUpdated: new Date().toISOString(),
+				qtimer,
+				playlist: qtimer.playlist ?? this.runtimeState.playlist,
+			}
+
+			this.updateStatus(InstanceStatus.Ok)
+			this.updateVariablesFromState()
+			this.checkFeedbacks()
+			this.refreshDynamicDefinitions()
+		} catch (error) {
+			this.log('debug', `WebSocket message parse failed: ${this.formatError(error)}`)
 		}
 	}
 
@@ -451,6 +608,39 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		return buildBaseUrl(this.config.host, safeNumber(this.config.port, 2222))
 	}
 
+	/**
+	 * A secondary endpoint that may be missing (older QTimer) or off (streams disabled). Its
+	 * failure is logged once per connection at debug level and never affects the status.
+	 */
+	private async fetchOptional<T>(path: string, label: string, signal: AbortSignal): Promise<T | undefined> {
+		try {
+			const result = await this.apiFetch<T>(path, { signal })
+			if (this.failedOptionalEndpoints.delete(path)) {
+				this.log('debug', `${label} refresh (${path}) answers again`)
+			}
+			return result
+		} catch (error) {
+			if (signal.aborted) {
+				return undefined
+			}
+
+			if (!this.failedOptionalEndpoints.has(path)) {
+				this.failedOptionalEndpoints.add(path)
+				this.log(
+					'debug',
+					`${label} refresh failed (${path}): ${this.formatError(error)}; not logged again until it answers`,
+				)
+			}
+			return undefined
+		}
+	}
+
+	/**
+	 * One poll tick. `/api/status` goes first and alone: if QTimer does not answer it, nothing
+	 * else is asked of the same host, the outage is logged once, and the loop backs off.
+	 * Only after it succeeds are the secondary endpoints fetched, and those only every
+	 * SLOW_POLL_INTERVAL_MS since they hold slow-changing lists.
+	 */
 	async refreshAllState(): Promise<void> {
 		if (this.pollInFlight) {
 			return
@@ -464,33 +654,57 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		this.pollInFlight = true
 		const requestController = this.fetchAbortController
 		const signal = requestController.signal
+		const isStale = (): boolean => requestController !== this.fetchAbortController || signal.aborted
 
 		try {
 			const baseUrl = this.getBaseUrl()
-			const pollStreams = this.config.pollStreams !== false
-			const optional = async <T>(path: string, label: string): Promise<T | undefined> =>
-				this.apiFetch<T>(path, { signal }).catch((error) => {
-					if (signal.aborted && error instanceof Error && error.name === 'AbortError') {
-						return undefined
-					}
 
-					this.log('debug', `${label} refresh failed: ${this.formatError(error)}`)
-					return undefined
-				})
-
-			const [statusResponse, playlistResponse, audioResponse, ndiResponse, omtResponse] = await Promise.all([
-				this.apiFetch<QTimerStatusResponse>('/api/status', { signal }),
-				optional<QTimerPlaylistStateResponse>('/api/playlist/state', 'Playlist'),
-				optional<QTimerAudioSettingsResponse>('/api/audio/settings', 'Audio'),
-				pollStreams ? optional<QTimerNdiStatus>('/api/ndi/status', 'NDI') : Promise.resolve(undefined),
-				pollStreams ? optional<QTimerOmtStatus>('/api/omt/status', 'OMT') : Promise.resolve(undefined),
-			])
-
-			if (requestController !== this.fetchAbortController || signal.aborted) {
+			let statusResponse: QTimerStatusResponse
+			try {
+				statusResponse = await this.apiFetch<QTimerStatusResponse>('/api/status', { signal })
+			} catch (error) {
+				if (!isStale()) {
+					this.handlePollFailure(error)
+				}
 				return
 			}
 
-			const audioSettings = audioResponse?.audioSettings ?? statusResponse.state?.audioSettings
+			if (isStale()) {
+				return
+			}
+
+			const wasConnected = this.runtimeState.connected
+			const state = statusResponse.state ?? {}
+			// The status snapshot has carried the playlist since QTimer 2026.8; only an older
+			// build still needs the dedicated endpoint, and then only on the slow lane.
+			const playlistFromState = state.playlist && typeof state.playlist === 'object' ? state.playlist : undefined
+			const pollStreams = this.config.pollStreams !== false
+
+			let audioResponse: QTimerAudioSettingsResponse | undefined
+			let ndiResponse: QTimerNdiStatus | undefined
+			let omtResponse: QTimerOmtStatus | undefined
+			let languageResponse: QTimerLanguageResponse | undefined
+			let playlistResponse: QTimerPlaylistStateResponse | undefined
+			const slowLaneRan = Date.now() >= this.slowLaneDueAt
+
+			if (slowLaneRan) {
+				this.slowLaneDueAt = Date.now() + Math.max(SLOW_POLL_INTERVAL_MS, this.pollInterval)
+				;[audioResponse, ndiResponse, omtResponse, languageResponse, playlistResponse] = await Promise.all([
+					this.fetchOptional<QTimerAudioSettingsResponse>('/api/audio/settings', 'Audio', signal),
+					pollStreams ? this.fetchOptional<QTimerNdiStatus>('/api/ndi/status', 'NDI', signal) : undefined,
+					pollStreams ? this.fetchOptional<QTimerOmtStatus>('/api/omt/status', 'OMT', signal) : undefined,
+					this.fetchOptional<QTimerLanguageResponse>('/api/language', 'Language', signal),
+					playlistFromState
+						? undefined
+						: this.fetchOptional<QTimerPlaylistStateResponse>('/api/playlist/state', 'Playlist', signal),
+				])
+
+				if (isStale()) {
+					return
+				}
+			}
+
+			const audioSettings = audioResponse?.audioSettings ?? state.audioSettings
 			const audioSounds =
 				audioResponse !== undefined ? this.normalizeAudioSounds(audioResponse) : (this.runtimeState.audioSounds ?? [])
 
@@ -500,40 +714,70 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 				serverUrl: statusResponse.network?.url || baseUrl,
 				lastUpdated: statusResponse.timestamp || new Date().toISOString(),
 				qtimer: {
-					...statusResponse.state,
+					...state,
 					audioSettings,
 				},
-				playlist: playlistResponse?.playlist ?? this.runtimeState.playlist,
+				playlist: playlistFromState ?? playlistResponse?.playlist ?? this.runtimeState.playlist,
 				audioSounds,
 				ndi: pollStreams ? (ndiResponse ?? this.runtimeState.ndi) : undefined,
 				omt: pollStreams ? (omtResponse ?? this.runtimeState.omt) : undefined,
+				language: normalizeLanguageCode(languageResponse?.language) ?? this.runtimeState.language,
+				messageLanguage:
+					normalizeMessageLanguageCode(languageResponse?.messageLanguage) ?? this.runtimeState.messageLanguage,
+			}
+
+			this.consecutivePollFailures = 0
+			if (!wasConnected) {
+				if (this.lastLoggedPollError !== null) {
+					this.log('info', `QTimer at ${baseUrl} answers again`)
+				}
+				this.lastLoggedPollError = null
 			}
 
 			this.updateStatus(InstanceStatus.Ok)
 			this.updateVariablesFromState()
 			this.checkFeedbacks()
 			this.refreshDynamicDefinitions()
-		} catch (error) {
-			if (requestController !== this.fetchAbortController || requestController.signal.aborted) {
-				return
-			}
-
-			this.runtimeState = {
-				...this.runtimeState,
-				connected: false,
-				lastError: this.formatError(error),
-				serverUrl: this.getBaseUrl(),
-			}
-
-			this.updateStatus(
-				this.isAuthError(error) ? InstanceStatus.AuthenticationFailure : InstanceStatus.ConnectionFailure,
-				this.runtimeState.lastError ?? undefined,
-			)
-			this.updateVariablesFromState()
-			this.checkFeedbacks()
+			this.ensureWebSocket()
 		} finally {
 			this.pollInFlight = false
 		}
+	}
+
+	/**
+	 * `/api/status` failed. Everything that would talk to the same host is stopped (socket
+	 * included), the reason is logged once per distinct message, and the poll backs off.
+	 */
+	private handlePollFailure(error: unknown): void {
+		const message = this.formatError(error)
+		const wasConnected = this.runtimeState.connected
+
+		this.consecutivePollFailures++
+		this.slowLaneDueAt = 0
+		this.failedOptionalEndpoints.clear()
+		this.disconnectWebSocket()
+
+		this.runtimeState = {
+			...this.runtimeState,
+			connected: false,
+			lastError: message,
+			serverUrl: this.getBaseUrl(),
+		}
+
+		if (message !== this.lastLoggedPollError) {
+			this.lastLoggedPollError = message
+			this.log(
+				'error',
+				`${wasConnected ? 'Lost' : 'No'} connection to QTimer at ${this.getBaseUrl()}: ${message}. Retrying with backoff (up to ${MAX_POLL_BACKOFF_MS / 1000} s); no further log until it changes.`,
+			)
+		}
+
+		this.updateStatus(
+			this.isAuthError(error) ? InstanceStatus.AuthenticationFailure : InstanceStatus.ConnectionFailure,
+			message,
+		)
+		this.updateVariablesFromState()
+		this.checkFeedbacks()
 	}
 
 	async postCommand(path: string, body?: unknown): Promise<void> {
@@ -549,6 +793,10 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			}
 
 			await this.apiFetch<unknown>(path, init)
+			if (SLOW_LANE_COMMAND_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+				// The result of these lives outside the status snapshot; refresh it now, not in 5 s.
+				this.slowLaneDueAt = 0
+			}
 			void this.refreshAllState()
 		} catch (error) {
 			const message = this.formatError(error)
@@ -574,11 +822,17 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		return this.authFailed
 	}
 
+	/** `fetch failed` alone says nothing; the cause (ECONNREFUSED, EHOSTUNREACH, ...) is what helps. */
 	private formatError(error: unknown): string {
-		if (error instanceof Error) {
-			return error.message
+		if (!(error instanceof Error)) {
+			return String(error)
 		}
-		return String(error)
+
+		const cause = error.cause
+		if (cause instanceof Error && cause.message && cause.message !== error.message) {
+			return `${error.message} (${cause.message})`
+		}
+		return error.message
 	}
 
 	private decodeWebSocketMessage(data: RawData): string {
@@ -720,6 +974,8 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		const additionalTimeParts = splitDurationParts(additionalTimeSeconds)
 		const playlistChronoParts = splitDurationParts(playlistChronoSeconds)
 		const clockParts = parseClockParts(qtimer?.currentTime)
+		const language = this.runtimeState.language ?? ''
+		const messageLanguage = this.runtimeState.messageLanguage ?? ''
 
 		this.setVariableValues({
 			connection_status: this.runtimeState.connected
@@ -831,6 +1087,13 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			output_layout_network: this.formatOutputLayout('network'),
 			timer_preset_count: qtimer?.presets?.length ?? 0,
 			preset_message_count: qtimer?.presetMessages?.length ?? 0,
+			background_color: qtimer?.displaySettings?.background?.color ?? '',
+			mode_fade_enabled: qtimer?.modeFade?.enabled === true,
+			mode_fade_duration_ms: safeNumber(qtimer?.modeFade?.durationMs),
+			mode_fade_active: isModeFadeActive(qtimer),
+			language,
+			message_language: messageLanguage,
+			message_language_resolved: resolveMessageLanguage(language, messageLanguage),
 			ndi_available: ndi?.ndiRuntimeAvailable === true,
 			ndi_running: ndi?.running === true,
 			ndi_test_pattern: ndi?.testPatternActive === true,

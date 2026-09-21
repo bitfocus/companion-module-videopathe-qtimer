@@ -5,6 +5,7 @@ import type {
 	CompanionTextSize,
 } from '@companion-module/base'
 import { combineRgb } from '@companion-module/base'
+import { BACKGROUND_COLOR_PRESETS, LANGUAGE_CHOICES } from './choices.js'
 import type { ModuleInstance } from './main.js'
 
 export function UpdatePresets(self: ModuleInstance): void {
@@ -28,6 +29,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 	const layoutCategory = 'Layouts'
 	const displayCategory = 'Display'
 	const networkCategory = 'Network Streams'
+	const languageCategory = 'Language'
 	const displayModeChoices = [
 		{ id: 'timer', label: 'TIMER' },
 		{ id: 'clock', label: 'CLOCK' },
@@ -1462,8 +1464,143 @@ export function UpdatePresets(self: ModuleInstance): void {
 		'Playlist: current display time readout',
 	)
 
+	// Output background (chroma key) and the cross-fade between modes (QTimer 2026.9).
+	for (const background of BACKGROUND_COLOR_PRESETS) {
+		const isBlack = background.color === 0x000000
+		createActionPreset(
+			`display_background_${background.id}`,
+			displayCategory,
+			`Background: ${background.label}`,
+			`BG\n${background.label.replace('Chroma key ', '').toUpperCase()}`,
+			isBlack ? combineRgb(39, 39, 42) : background.color,
+			isBlack ? combineRgb(255, 255, 255) : combineRgb(0, 0, 0),
+			'display_set_background_color',
+			{ color: background.color },
+			[
+				{
+					feedbackId: 'background_color_matches',
+					options: { color: background.color },
+					style: {
+						bgcolor: isBlack ? combineRgb(0, 0, 0) : background.color,
+						color: isBlack ? combineRgb(255, 255, 255) : combineRgb(0, 0, 0),
+					},
+				},
+			],
+		)
+	}
+	createActionPreset(
+		'display_mode_fade_toggle',
+		displayCategory,
+		'Toggle fade between modes',
+		'MODE\nFADE',
+		combineRgb(76, 29, 149),
+		combineRgb(255, 255, 255),
+		'display_set_mode_fade',
+		{ state: 'toggle', setDuration: false, durationMs: 1000 },
+		[
+			{
+				feedbackId: 'mode_fade_enabled',
+				options: {},
+				style: { bgcolor: combineRgb(124, 58, 237), color: combineRgb(255, 255, 255) },
+			},
+			{
+				feedbackId: 'mode_fade_active',
+				options: {},
+				style: { bgcolor: combineRgb(234, 179, 8), color: combineRgb(0, 0, 0) },
+			},
+		],
+	)
+
+	// One button per UI language, lit when QTimer reports that language.
+	for (const language of LANGUAGE_CHOICES) {
+		createActionPreset(
+			`language_${language.id}`,
+			languageCategory,
+			`UI language: ${language.label}`,
+			`LANG\n${language.id.toUpperCase()}`,
+			combineRgb(30, 41, 59),
+			combineRgb(255, 255, 255),
+			'language_set',
+			{ language: language.id },
+			[
+				{
+					feedbackId: 'language_matches',
+					options: { language: language.id },
+					style: { bgcolor: combineRgb(59, 130, 246), color: combineRgb(255, 255, 255) },
+				},
+			],
+		)
+	}
+	createActionPreset(
+		'message_language_auto',
+		languageCategory,
+		'Preset messages: follow the UI language',
+		'MSG\nAUTO',
+		combineRgb(51, 65, 85),
+		combineRgb(255, 255, 255),
+		'message_language_set',
+		{ messageLanguage: 'auto' },
+		[
+			{
+				feedbackId: 'message_language_matches',
+				options: { messageLanguage: 'auto', resolved: false },
+				style: { bgcolor: combineRgb(59, 130, 246), color: combineRgb(255, 255, 255) },
+			},
+		],
+	)
+	for (const language of LANGUAGE_CHOICES) {
+		createActionPreset(
+			`message_language_${language.id}`,
+			languageCategory,
+			`Preset messages in ${language.label}`,
+			`MSG\n${language.id.toUpperCase()}`,
+			combineRgb(51, 65, 85),
+			combineRgb(255, 255, 255),
+			'message_language_set',
+			{ messageLanguage: language.id },
+			[
+				{
+					feedbackId: 'message_language_matches',
+					options: { messageLanguage: language.id, resolved: true },
+					style: { bgcolor: combineRgb(59, 130, 246), color: combineRgb(255, 255, 255) },
+				},
+			],
+		)
+	}
+	createReadoutPreset(
+		'readout_language',
+		'UI language readout',
+		`LANG\n${variable('language')}`,
+		combineRgb(30, 41, 59),
+		'18',
+	)
+	createReadoutPreset(
+		'readout_message_language',
+		'Preset message language readout',
+		`MSG LANG\n${variable('message_language_resolved')}`,
+		combineRgb(51, 65, 85),
+		'18',
+	)
+	createReadoutPreset(
+		'readout_background_color',
+		'Output background color readout',
+		`BG\n${variable('background_color')}`,
+		combineRgb(39, 39, 42),
+		'14',
+	)
+
 	applyFixedTextSizeToCategories(
-		['Timer', 'Chrono', 'Audio', playlistCategory, screen2Category, layoutCategory, displayCategory, networkCategory],
+		[
+			'Timer',
+			'Chrono',
+			'Audio',
+			playlistCategory,
+			screen2Category,
+			layoutCategory,
+			displayCategory,
+			networkCategory,
+			languageCategory,
+		],
 		'14',
 	)
 

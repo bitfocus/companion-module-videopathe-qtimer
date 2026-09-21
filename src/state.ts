@@ -65,6 +65,24 @@ export interface QTimerAudioSound {
 	fileName?: string
 }
 
+export interface QTimerBackgroundSetting {
+	/** Global output background colour (also what a chroma key is pulled from). */
+	color?: string
+}
+
+export type ModeFadePhase = 'idle' | 'fade-out' | 'fade-in'
+
+/** Cross-fade between display modes (QTimer 2026.9). */
+export interface QTimerModeFadeState {
+	enabled?: boolean
+	durationMs?: number
+	phase?: ModeFadePhase
+	startedAt?: number | null
+	pendingMode?: string | null
+	fromMode?: string | null
+	toMode?: string | null
+}
+
 export interface QTimerAudioSettings {
 	enabled?: boolean
 	masterVolume?: number
@@ -126,7 +144,11 @@ export interface QTimerStateSnapshot {
 	outputLayoutOverrides?: OutputLayoutOverrides
 	layoutMessages?: Record<string, Record<string, { message?: string; updatedAt?: string; cleared?: boolean }>>
 	audioSettings?: QTimerAudioSettings
+	/** Same snapshot as `/api/playlist/state`, carried by `/api/status` and the socket since 2026.8 */
+	playlist?: PlaylistSnapshot
+	modeFade?: QTimerModeFadeState
 	displaySettings?: {
+		background?: QTimerBackgroundSetting
 		progressBar?: QTimerProgressBarDisplayElement
 		timer?: QTimerTimerDisplayElement
 		message?: QTimerColorDisplayElement
@@ -238,6 +260,40 @@ export interface QTimerAudioSettingsResponse {
 	audioSettings?: QTimerAudioSettings
 	defaultSounds?: QTimerAudioSound[]
 	sounds?: QTimerAudioSound[]
+}
+
+export interface QTimerLanguageResponse {
+	success?: boolean
+	language?: string
+	messageLanguage?: string
+}
+
+/**
+ * Languages the module offers. QTimer 2026.9 ships `fr` and `en`; the others are the
+ * ones planned for 2026.10, listed now so buttons built today keep working then.
+ */
+export const LANGUAGE_CODES = ['fr', 'en', 'es', 'it', 'de', 'pt', 'nl'] as const
+export type LanguageCode = (typeof LANGUAGE_CODES)[number]
+export const MESSAGE_LANGUAGE_AUTO = 'auto'
+
+export function normalizeLanguageCode(value: unknown): LanguageCode | undefined {
+	const code = typeof value === 'string' ? value.trim().toLowerCase() : ''
+	return (LANGUAGE_CODES as readonly string[]).includes(code) ? (code as LanguageCode) : undefined
+}
+
+export function normalizeMessageLanguageCode(value: unknown): LanguageCode | typeof MESSAGE_LANGUAGE_AUTO | undefined {
+	const code = typeof value === 'string' ? value.trim().toLowerCase() : ''
+	return code === MESSAGE_LANGUAGE_AUTO ? MESSAGE_LANGUAGE_AUTO : normalizeLanguageCode(code)
+}
+
+/** The language preset messages actually use: `auto` follows the UI language. */
+export function resolveMessageLanguage(language: string, messageLanguage: string): string {
+	return messageLanguage && messageLanguage !== MESSAGE_LANGUAGE_AUTO ? messageLanguage : language
+}
+
+export function isModeFadeActive(state: QTimerStateSnapshot | undefined): boolean {
+	const phase = state?.modeFade?.phase
+	return phase === 'fade-out' || phase === 'fade-in'
 }
 
 export function safeNumber(value: unknown, fallback = 0): number {
@@ -600,8 +656,10 @@ export function inferLayoutMode(state: QTimerStateSnapshot | undefined): LayoutM
 }
 
 export function isDisplayElementVisible(state: QTimerStateSnapshot | undefined, element: string): boolean {
-	const displaySettings: Record<string, QTimerDisplayElement | undefined> = state?.displaySettings ?? {}
-	return displaySettings[element]?.visible === true
+	const displaySettings: Record<string, QTimerDisplayElement | QTimerBackgroundSetting | undefined> =
+		state?.displaySettings ?? {}
+	const setting = displaySettings[element]
+	return setting !== undefined && 'visible' in setting && setting.visible === true
 }
 
 export function isClock12HourFormat(state: QTimerStateSnapshot | undefined): boolean {

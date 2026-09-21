@@ -13,6 +13,17 @@ App is available for free on videopathe.com for Windows / MacOS.
 - `API PIN` is only needed when QTimer's **Protection API par PIN** option is enabled and Companion runs on
   another machine. See below.
 
+### How Polling Behaves
+
+Each tick asks QTimer for `/api/status` first, and nothing else until that answers. If QTimer is not running
+or the host/port is wrong, the module logs the reason **once**, shows a connection failure, and retries with
+a growing delay (1 s, 2 s, 4 s, 8 s, then every 10 s) instead of hammering the host. The WebSocket is only
+opened once HTTP has answered, so a stopped QTimer never produces a second stream of errors. When QTimer
+comes back, a single `answers again` line is logged and the normal poll interval resumes.
+
+The slow-changing lists (audio sounds, NDI / OMT status, language) are refreshed every 5 s rather than on
+every tick; the playlist now comes with the status snapshot, so it costs no extra request.
+
 ### PIN-Protected API
 
 QTimer can lock its network interfaces behind a 4 to 8 digit PIN (Settings, Security). Two separate switches
@@ -39,11 +50,39 @@ module log, instead of looking like an unreachable host.
 - **Layout presets: apply any of the 12 presets to the main screen, the second screen, or the network output**
 - **Display elements: show/hide, recolour, progress-bar thresholds, raw `displaySettings` JSON**
 - **Clock: 12h AM/PM or 24h format**
+- **Output background colour (chroma key) and the fade between display modes**
+- **UI language and preset-message language**
 - Messages: set, clear, blink, visibility, red alert, preset messages, operator-view messages
 - Audio: enable, disable, stop, master volume, stop-current-on-play, rules on or off, play audio
 - Playlist: start, stop, previous, next, select session, enable or disable sessions, intermission and end-of-session options, save
 - **Network streams: NDI and OMT status, test patterns, alpha channel, stop**
-- Presets grouped by Timer, Chrono, Display, Screen 2, Layouts, Message, Audio, Playlist, Network Streams, and Readouts
+- Presets grouped by Timer, Chrono, Display, Screen 2, Layouts, Message, Audio, Playlist, Network Streams, Language, and Readouts
+
+### Background Colour, Chroma Key and Mode Fade
+
+QTimer 2026.9 added a global output background colour (used as the chroma key colour) and an optional
+cross-fade between display modes.
+
+- `Display: Set background color` sets that colour. The `Display` presets include `BG BLACK`, `BG GREEN` and
+  `BG BLUE`, each lit by the `Output background color matches` feedback when the output is keyed that way.
+- `Display: Set fade between modes` toggles or forces the fade, and can set its duration (200 to 4000 ms).
+  The `mode_fade_enabled`, `mode_fade_duration_ms` and `mode_fade_active` variables and the two matching
+  feedbacks read the fade state from any QTimer 2026.9. **Setting** it over the API needs QTimer 2026.10 or
+  later; a 2026.9 build answers `404` to that action.
+
+Logo and background **images** are not driven from here: they are part of the layout presets, so apply the
+preset that carries the image with `Layout: Apply preset to an output`.
+
+### Language
+
+`Language: Set UI language` and `Language: Set preset message language` drive QTimer's `/api/language` and
+`/api/message-language`. The `language`, `message_language` and `message_language_resolved` variables and
+the `UI language matches` / `Preset message language matches` feedbacks follow the value QTimer reports,
+live over the WebSocket. The `Language` preset category has one button per language for both settings.
+
+QTimer 2026.9 accepts `fr` and `en`. The module already lists `es`, `it`, `de`, `pt` and `nl`, which are
+planned for QTimer 2026.10: buttons built with them keep working on that release, and an older QTimer simply
+rejects them with a `400`.
 
 ### Second Extended Screen
 
@@ -93,6 +132,8 @@ The module exposes useful runtime values such as:
 - message text, color, visibility, and blinking state
 - chrono time and thresholds
 - additional time full/hours/minutes/seconds
+- output background colour, mode fade state and duration
+- UI language and preset-message language
 - audio enabled state and master volume
 - playlist current and next session, end action, intermission countdown
 - NDI and OMT source name, resolution, frame rate, running state
@@ -105,6 +146,8 @@ The module includes boolean feedbacks for common states:
 - current display mode, layout family, and second screen mode/mirror
 - output layout preset per output
 - display element visibility and clock format
+- output background colour, mode fade enabled / in progress
+- UI language and preset-message language
 - timer running or finished, remaining time and progress comparisons
 - chrono running, chrono time comparison, additional time comparison
 - message visibility and blinking
@@ -127,7 +170,8 @@ stream from the QTimer _Network streams_ window, then use Companion to monitor o
 The current implementation uses a hybrid approach:
 
 - WebSocket for live timer state refresh
-- HTTP polling for periodic fallback refresh, playlist, audio, and stream status
+- HTTP polling for periodic fallback refresh (status + playlist), and a slower lane for the sound list,
+  language and stream status
 
 ### Local Development With Companion
 
